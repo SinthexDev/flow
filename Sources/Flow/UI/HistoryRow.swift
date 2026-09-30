@@ -50,14 +50,18 @@ struct HistoryRow: View {
                     HStack(spacing: 8) {
                         Button(L10n.s("history.copy"), action: copy).buttonStyle(SoftButtonStyle())
                         Button(L10n.s("history.copyRaw")) { state.copy(entry.raw) }.buttonStyle(SoftButtonStyle())
-                        Spacer()
+                        Spacer(minLength: 8)
                         Button(role: .destructive) {
                             withAnimation(.snappy) { state.deleteHistory(entry.id) }
                         } label: {
-                            Label(L10n.s("history.remove"), systemImage: "trash")
+                            HStack(spacing: 6) {
+                                Image(systemName: "trash")
+                                Text(L10n.s("history.remove"))
+                            }
                         }
                         .buttonStyle(SoftButtonStyle())
                         .foregroundStyle(.red)
+                        .fixedSize()
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))

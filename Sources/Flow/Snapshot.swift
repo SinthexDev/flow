@@ -27,10 +27,12 @@ enum Snapshot {
             state.section = section
             render(MainView().environmentObject(state), size: NSSize(width: 1100, height: 760), to: directory.appendingPathComponent("main-\(section.rawValue).png"))
         }
+        state.section = .commands
+        render(MainView().environmentObject(state), size: NSSize(width: 1100, height: 1740), to: directory.appendingPathComponent("main-commands-full.png"))
         state.section = .style
         render(MainView().environmentObject(state), size: NSSize(width: 1100, height: 1080), to: directory.appendingPathComponent("main-style-full.png"))
         state.section = .settings
-        render(MainView().environmentObject(state), size: NSSize(width: 1100, height: 1280), to: directory.appendingPathComponent("main-settings-full.png"))
+        render(MainView().environmentObject(state), size: NSSize(width: 1100, height: 2000), to: directory.appendingPathComponent("main-settings-full.png"))
         let previousAppearance = NSApp.appearance
         NSApp.appearance = NSAppearance(named: .darkAqua)
         render(

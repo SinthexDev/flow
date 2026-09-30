@@ -2,9 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SUPPORT="$HOME/Library/Application Support/Flow"
+SUPPORT="$HOME/Library/Application Support/Sinthex Flow"
 PYTHON="$SUPPORT/.venv/bin/python"
-APP="/Applications/Flow.app"
+APP="/Applications/Sinthex Flow.app"
+OLD="/Applications/Flow.app"
 
 mkdir -p "$SUPPORT"
 if [[ ! -x "$PYTHON" ]]; then
@@ -46,10 +47,10 @@ echo "Baue die Mac-App…"
 cd "$ROOT"
 swift build -c release
 
-STAGE="$ROOT/dist/Flow.app"
+STAGE="$ROOT/dist/Sinthex Flow.app"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
-cp "$ROOT/.build/release/Flow" "$STAGE/Contents/MacOS/Flow"
+cp "$ROOT/.build/release/Flow" "$STAGE/Contents/MacOS/Sinthex Flow"
 cp "$ROOT/packaging/Info.plist" "$STAGE/Contents/Info.plist"
 if [[ ! -f "$ROOT/packaging/AppIcon.icns" ]]; then
   swift "$ROOT/scripts/make_icon.swift" "$ROOT/dist/AppIcon.iconset"
@@ -57,7 +58,7 @@ if [[ ! -f "$ROOT/packaging/AppIcon.icns" ]]; then
 fi
 cp "$ROOT/packaging/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$STAGE/Contents/PkgInfo"
-chmod +x "$STAGE/Contents/MacOS/Flow"
+chmod +x "$STAGE/Contents/MacOS/Sinthex Flow"
 
 IDENTITY=""
 if IDENTITY="$("$ROOT/scripts/ensure_signing_identity.sh")"; then
@@ -69,12 +70,12 @@ else
   exit 1
 fi
 
-osascript -e 'tell application "Flow" to quit' >/dev/null 2>&1 || true
-if pgrep -f "/Applications/Flow.app/Contents/MacOS/Flow" >/dev/null 2>&1; then
-  pkill -f "/Applications/Flow.app/Contents/MacOS/Flow" || true
+osascript -e 'tell application id "de.sinthex.flow" to quit' >/dev/null 2>&1 || true
+if pgrep -f "/Applications/(Sinthex )?Flow.app/Contents/MacOS/" >/dev/null 2>&1; then
+  pkill -f "/Applications/(Sinthex )?Flow.app/Contents/MacOS/" || true
   sleep 0.4
 fi
-rm -rf "$APP"
+rm -rf "$APP" "$OLD"
 cp -R "$STAGE" "$APP"
 codesign --force --deep --sign "$IDENTITY" --identifier "de.sinthex.flow" "$APP"
 echo "Installiert: $APP (Signatur bleibt über Updates stabil)"

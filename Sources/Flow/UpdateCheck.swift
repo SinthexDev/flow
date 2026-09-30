@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 struct AppRelease: Equatable {
@@ -66,18 +67,23 @@ enum UpdateCheck {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
-        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("Flow-\(release.version).pkg")
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("Sinthex-Flow-\(release.version).pkg")
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: temp, to: dest)
+        let clear = Process()
+        clear.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        clear.arguments = ["-d", "com.apple.quarantine", dest.path]
+        try? clear.run()
+        clear.waitUntilExit()
         return dest
     }
 
-    /// Expands the package and replaces the running app, then that app opens again.
-    /// When the folder is not writable, macOS asks for an administrator password
-    /// before this app quits. The replacement then belongs to the user.
+    /// Expands the package, then a detached script replaces the running app and opens it again.
+    /// The package file itself is never opened. A root-owned copy asks for the password once
+    /// and is then given to the user, so the next update needs no prompt.
     static func stageRelaunch(pkg: URL, version: String) throws {
         let work = FileManager.default.temporaryDirectory
-            .appendingPathComponent("FlowUpdate-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("SinthexFlowUpdate-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let expanded = work.appendingPathComponent("expanded", isDirectory: true)
         let expand = Process()
@@ -89,35 +95,20 @@ enum UpdateCheck {
               let source = flowApp(in: expanded, version: version) else {
             throw URLError(.cannotDecodeContentData)
         }
+        let staged = work.appendingPathComponent("next.app", isDirectory: true)
+        guard ditto(source, to: staged) else { throw URLError(.cannotCreateFile) }
         let destination = Bundle.main.bundleURL.standardizedFileURL
         guard destination.pathExtension == "app" else { throw URLError(.cannotCreateFile) }
-        let parent = destination.deletingLastPathComponent()
-        let incoming = parent.appendingPathComponent("Flow.app.incoming")
-        let owner = NSUserName()
-        let group = groupName()
-        let stagedBeside = FileManager.default.isWritableFile(atPath: parent.path)
-            && ditto(source, to: incoming)
-        if !stagedBeside {
-            try? FileManager.default.removeItem(at: incoming)
-            try privilegedReplace(source: source, destination: destination, owner: owner, group: group)
-        }
         let script = work.appendingPathComponent("relaunch.sh")
-        let body = stagedBeside
-            ? relaunchAfterSwap(incoming: incoming, destination: destination)
-            : relaunchAfterPrivileged(destination: destination)
+        let body = relaunchScript(
+            staged: staged,
+            destination: destination,
+            owner: NSUserName(),
+            group: groupName()
+        )
         try body.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-        let launch = Process()
-        launch.executableURL = URL(fileURLWithPath: "/bin/bash")
-        launch.arguments = [
-            "-c",
-            "nohup \"$0\" \"$1\" >/dev/null 2>&1 &",
-            script.path,
-            "\(ProcessInfo.processInfo.processIdentifier)",
-        ]
-        try launch.run()
-        launch.waitUntilExit()
-        guard launch.terminationStatus == 0 else { throw URLError(.cannotOpenFile) }
+        try spawnDetached([script.path, "\(ProcessInfo.processInfo.processIdentifier)"])
     }
 
     private static func flowApp(in root: URL, version: String) -> URL? {
@@ -126,9 +117,9 @@ enum UpdateCheck {
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ) else { return nil }
-        for case let url as URL in found where url.lastPathComponent == "Flow.app" {
+        for case let url as URL in found where url.lastPathComponent == LegacyName.bundleName {
             let info = url.appendingPathComponent("Contents/Info.plist")
-            let binary = url.appendingPathComponent("Contents/MacOS/Flow")
+            let binary = url.appendingPathComponent("Contents/MacOS/\(LegacyName.executableName)")
             guard FileManager.default.isExecutableFile(atPath: binary.path),
                   let dict = NSDictionary(contentsOf: info),
                   dict["CFBundleIdentifier"] as? String == "de.sinthex.flow",
@@ -145,50 +136,70 @@ enum UpdateCheck {
         copy.arguments = [source.path, destination.path]
         guard (try? copy.run()) != nil else { return false }
         copy.waitUntilExit()
-        let binary = destination.appendingPathComponent("Contents/MacOS/Flow")
+        let binary = destination.appendingPathComponent("Contents/MacOS/\(LegacyName.executableName)")
         return copy.terminationStatus == 0 && FileManager.default.isExecutableFile(atPath: binary.path)
     }
 
-    private static func privilegedReplace(source: URL, destination: URL, owner: String, group: String) throws {
-        let script = FileManager.default.temporaryDirectory
-            .appendingPathComponent("FlowUpdate-privileged-\(UUID().uuidString).sh")
-        let body = """
+    private static func relaunchScript(staged: URL, destination: URL, owner: String, group: String) -> String {
+        let stagedPath = shellQuote(staged.path)
+        let destinationPath = shellQuote(destination.path)
+        let ownerName = shellQuote(owner)
+        let groupName = shellQuote(group)
+        return """
         #!/bin/bash
-        set -euo pipefail
-        dest="$1"
-        src="$2"
-        owner="$3"
-        group="$4"
-        backup="${dest}.previous"
-        rm -rf "$backup"
-        mv "$dest" "$backup"
-        if ! /usr/bin/ditto "$src" "$dest"; then
-          mv "$backup" "$dest"
-          exit 1
+        trap '' HUP TERM
+        src=\(stagedPath)
+        dest=\(destinationPath)
+        owner=\(ownerName)
+        group=\(groupName)
+        log="${HOME}/Library/Logs/Sinthex Flow-update.log"
+        mkdir -p "$(dirname "$log")"
+        exec >>"$log" 2>&1
+        echo "=== $(date '+%Y-%m-%d %H:%M:%S') update start parent=$1"
+        for _ in $(seq 1 150); do
+          kill -0 "$1" 2>/dev/null || break
+          sleep 0.2
+        done
+        sleep 0.4
+        if rm -rf "$dest" && /usr/bin/ditto "$src" "$dest"; then
+          /usr/bin/xattr -cr "$dest" || true
+          echo "replaced $dest"
+        else
+          echo "privileged replace $dest"
+          /usr/bin/osascript -e 'on run argv
+            set destPath to item 1 of argv
+            set srcPath to item 2 of argv
+            set ownerName to item 3 of argv
+            set groupName to item 4 of argv
+            do shell script "rm -rf " & quoted form of destPath & " && /usr/bin/ditto " & quoted form of srcPath & " " & quoted form of destPath & " && /usr/sbin/chown -R " & quoted form of (ownerName & ":" & groupName) & " " & quoted form of destPath & " && /usr/bin/xattr -cr " & quoted form of destPath with administrator privileges
+          end run' -- "$dest" "$src" "$owner" "$group"
         fi
-        /usr/sbin/chown -R "${owner}:${group}" "$dest"
-        /usr/bin/xattr -dr com.apple.quarantine "$dest" || true
+        /usr/bin/open "$dest"
+        echo "update finished"
         """
-        try body.write(to: script, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-        let ask = Process()
-        ask.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        ask.arguments = [
-            "-e",
-            """
-            on run argv
-              do shell script quoted form of (item 1 of argv) & " " & quoted form of (item 2 of argv) & " " & quoted form of (item 3 of argv) & " " & quoted form of (item 4 of argv) & " " & quoted form of (item 5 of argv) with administrator privileges
-            end run
-            """,
-            script.path,
-            destination.path,
-            source.path,
-            owner,
-            group,
-        ]
-        try ask.run()
-        ask.waitUntilExit()
-        guard ask.terminationStatus == 0 else { throw URLError(.noPermissionsToReadFile) }
+    }
+
+    /// Runs `/bin/bash` with these arguments in its own session, so it outlives the app.
+    static func spawnDetached(_ arguments: [String]) throws {
+        var attr: posix_spawnattr_t?
+        guard posix_spawnattr_init(&attr) == 0 else { throw URLError(.cannotOpenFile) }
+        defer { posix_spawnattr_destroy(&attr) }
+        guard posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID)) == 0 else {
+            throw URLError(.cannotOpenFile)
+        }
+        var actions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&actions) == 0 else { throw URLError(.cannotOpenFile) }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+        let argvPointers = ["/bin/bash"] + arguments
+        var cArgs = argvPointers.map { strdup($0) }
+        cArgs.append(nil)
+        defer { cArgs.forEach { free($0) } }
+        var child: pid_t = 0
+        let result = posix_spawn(&child, "/bin/bash", &actions, &attr, &cArgs, environ)
+        guard result == 0 else { throw URLError(.cannotOpenFile) }
     }
 
     private static func groupName() -> String {
@@ -204,60 +215,7 @@ enum UpdateCheck {
         return name.isEmpty ? "staff" : name
     }
 
-    private static func relaunchAfterSwap(incoming: URL, destination: URL) -> String {
-        let incomingPath = shellQuote(incoming.path)
-        let destinationPath = shellQuote(destination.path)
-        return """
-        #!/bin/bash
-        set -u
-        pid="$1"
-        incoming=\(incomingPath)
-        dest=\(destinationPath)
-        log="${HOME}/Library/Logs/Flow-update.log"
-        mkdir -p "$(dirname "$log")"
-        for _ in $(seq 1 150); do
-          kill -0 "$pid" 2>/dev/null || break
-          sleep 0.2
-        done
-        sleep 0.4
-        if rm -rf "$dest" && mv "$incoming" "$dest"; then
-          /usr/bin/xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
-          echo "$(date '+%Y-%m-%d %H:%M:%S') replaced $dest" >> "$log"
-        else
-          echo "$(date '+%Y-%m-%d %H:%M:%S') needs privileges" >> "$log"
-          /usr/bin/osascript - "$dest" "$incoming" <<'APPLESCRIPT' >> "$log" 2>&1
-        on run argv
-          do shell script "rm -rf " & quoted form of (item 1 of argv) & " && /bin/mv " & quoted form of (item 2 of argv) & " " & quoted form of (item 1 of argv) & " && /usr/bin/xattr -dr com.apple.quarantine " & quoted form of (item 1 of argv) with administrator privileges
-        end run
-        APPLESCRIPT
-        fi
-        if [ -d "$dest" ]; then
-          /usr/bin/open "$dest"
-        else
-          echo "$(date '+%Y-%m-%d %H:%M:%S') opening incoming copy" >> "$log"
-          /usr/bin/open "$incoming"
-        fi
-        """
-    }
-
-    private static func relaunchAfterPrivileged(destination: URL) -> String {
-        let destinationPath = shellQuote(destination.path)
-        return """
-        #!/bin/bash
-        set -u
-        pid="$1"
-        dest=\(destinationPath)
-        for _ in $(seq 1 150); do
-          kill -0 "$pid" 2>/dev/null || break
-          sleep 0.2
-        done
-        sleep 0.4
-        rm -rf "${dest}.previous"
-        /usr/bin/open "$dest"
-        """
-    }
-
-    private static func shellQuote(_ path: String) -> String {
+    static func shellQuote(_ path: String) -> String {
         "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 

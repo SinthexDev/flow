@@ -225,6 +225,30 @@ struct SettingsView: View {
             }
 
             SettingsSection(title: L10n.s("settings.data.section"), icon: "folder") {
+                SettingRow(title: L10n.s("settings.count.title"), detail: L10n.s("settings.count.detail")) {
+                    Toggle("", isOn: $state.config.countInstall).labelsHidden().toggleStyle(.switch)
+                }
+                Divider()
+                SettingRow(title: L10n.s("settings.history.keep.title"), detail: L10n.s("settings.history.keep.detail")) {
+                    Picker("", selection: $state.config.historyKeepDays) {
+                        ForEach(keepChoices, id: \.self) { days in
+                            Text(keepLabel(days)).tag(days)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Divider()
+                SettingRow(title: L10n.s("settings.history.limit.title"), detail: L10n.s("settings.history.limit.detail")) {
+                    Picker("", selection: $state.config.historyMaxEntries) {
+                        ForEach(limitChoices, id: \.self) { count in
+                            Text(limitLabel(count)).tag(count)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Divider()
                 SettingRow(title: L10n.s("settings.storage.title"), detail: L10n.s("settings.storage.detail")) {
                     HStack(spacing: 8) {
                         Button(L10n.s("settings.reveal")) {
@@ -301,6 +325,42 @@ struct SettingsView: View {
         return state.config.correctsWithOpenAI
             ? L10n.s("settings.footer.on", L10n.appVersion)
             : L10n.s("settings.footer.off", L10n.appVersion)
+    }
+
+    private var keepChoices: [Int] {
+        var days = FlowConfig.historyKeepChoices
+        let selected = state.config.historyKeepDays
+        if !days.contains(selected) {
+            days.append(selected)
+            days.sort()
+        }
+        return days
+    }
+
+    private var limitChoices: [Int] {
+        var counts = FlowConfig.historyLimitChoices
+        let selected = state.config.historyMaxEntries
+        if !counts.contains(selected) {
+            counts.append(selected)
+            counts.sort { a, b in
+                if a == 0 { return false }
+                if b == 0 { return true }
+                return a < b
+            }
+        }
+        return counts
+    }
+
+    private func keepLabel(_ days: Int) -> String {
+        switch days {
+        case 0: return L10n.s("settings.history.keep.forever")
+        case 365: return L10n.s("settings.history.keep.year")
+        default: return L10n.s("settings.history.keep.days", days)
+        }
+    }
+
+    private func limitLabel(_ count: Int) -> String {
+        count == 0 ? L10n.s("settings.history.limit.unlimited") : L10n.s("settings.history.limit.count", count)
     }
 
     private func syncModelName() {

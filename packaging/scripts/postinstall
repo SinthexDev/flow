@@ -1,0 +1,21 @@
+#!/bin/bash
+# The package installs as root. Hand the app to the person at the keyboard
+# so later updates can replace it without another password.
+# Builds up to 1.9.2 were called Flow.app; that copy goes, and a running one restarts as Sinthex Flow.
+app="/Applications/Sinthex Flow.app"
+old="/Applications/Flow.app"
+console="$(stat -f '%Su' /dev/console)"
+group="$(id -gn "$console" 2>/dev/null || echo staff)"
+chown -R "${console}:${group}" "$app" || true
+
+if [[ -d "$old" ]] && [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$old/Contents/Info.plist" 2>/dev/null)" == "de.sinthex.flow" ]]; then
+  running=0
+  if pkill -f "^$old/Contents/MacOS/Flow" 2>/dev/null; then running=1; fi
+  rm -rf "$old"
+  uid="$(id -u "$console" 2>/dev/null || true)"
+  if [[ "$running" == 1 && -n "$uid" && "$console" != "root" ]]; then
+    sleep 1
+    launchctl asuser "$uid" sudo -u "$console" /usr/bin/open "$app" || true
+  fi
+fi
+exit 0

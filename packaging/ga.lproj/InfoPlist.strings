@@ -1,2 +1,4 @@
-"NSMicrophoneUsageDescription" = "Úsáideann Flow an micreafón chun deachtú a aithint go logánta ar an Mac seo.";
-"NSAppleEventsUsageDescription" = "Cuireann Flow an téacs deachtaithe isteach san aip ghníomhach.";
+"CFBundleDisplayName" = "Sinthex Flow";
+"CFBundleName" = "Sinthex Flow";
+"NSMicrophoneUsageDescription" = "Úsáideann Sinthex Flow an micreafón chun deachtú a aithint go logánta ar an Mac seo.";
+"NSAppleEventsUsageDescription" = "Cuireann Sinthex Flow an téacs deachtaithe isteach san aip ghníomhach.";

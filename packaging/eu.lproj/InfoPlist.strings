@@ -1,2 +1,4 @@
-"NSMicrophoneUsageDescription" = "Flow-ek mikrofonoa erabiltzen du diktaketa Mac honetan lokalean aintzatesteko.";
-"NSAppleEventsUsageDescription" = "Flow-ek diktatutako testua txertatzen du app aktiboan.";
+"CFBundleDisplayName" = "Sinthex Flow";
+"CFBundleName" = "Sinthex Flow";
+"NSMicrophoneUsageDescription" = "Sinthex Flow-ek mikrofonoa erabiltzen du diktaketa Mac honetan lokalean aintzatesteko.";
+"NSAppleEventsUsageDescription" = "Sinthex Flow-ek diktatutako testua txertatzen du app aktiboan.";

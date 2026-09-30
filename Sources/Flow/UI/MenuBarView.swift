@@ -121,7 +121,7 @@ struct MenuBarView: View {
         HStack(spacing: 10) {
             FlowMark(size: 26)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Flow").font(.system(size: 14, weight: .semibold))
+                Text(L10n.appName).font(.system(size: 14, weight: .semibold))
                 Text(state.modelDisplayName)
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)

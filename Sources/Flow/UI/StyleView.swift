@@ -135,6 +135,8 @@ struct StyleView: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Button(L10n.s("style.command.more")) { state.section = .commands }
+                        .buttonStyle(SoftButtonStyle())
                 }
                 .card()
             }

@@ -1,2 +1,4 @@
-"NSMicrophoneUsageDescription" = "Flow fa servir el micròfon per reconèixer el dictat localment en aquest Mac.";
-"NSAppleEventsUsageDescription" = "Flow insereix el text dictat a l’app activa.";
+"CFBundleDisplayName" = "Sinthex Flow";
+"CFBundleName" = "Sinthex Flow";
+"NSMicrophoneUsageDescription" = "Sinthex Flow fa servir el micròfon per reconèixer el dictat localment en aquest Mac.";
+"NSAppleEventsUsageDescription" = "Sinthex Flow insereix el text dictat a l’app activa.";

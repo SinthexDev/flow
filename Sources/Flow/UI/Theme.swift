@@ -140,6 +140,8 @@ struct SoftButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .medium))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Capsule().fill(Color.primary.opacity(configuration.isPressed ? 0.13 : 0.07)))
@@ -193,8 +195,10 @@ struct Page<Content: View, Accessory: View>: View {
                             .font(.system(size: 14))
                             .foregroundStyle(.secondary)
                     }
-                    Spacer()
+                    .layoutPriority(0)
+                    Spacer(minLength: 12)
                     accessory
+                        .layoutPriority(1)
                 }
                 content
             }

@@ -87,7 +87,17 @@ private struct HeroCard: View {
                 VStack(alignment: .leading, spacing: 6) {
                     tip("hand.tap", L10n.s("home.tipDouble"))
                     tip("escape", L10n.s("home.tipEsc"))
-                    tip("wand.and.stars", L10n.s("home.tipRewrite"))
+                    Button {
+                        state.section = .commands
+                    } label: {
+                        HStack(spacing: 4) {
+                            tip("wand.and.stars", L10n.s("home.tipRewrite"))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             Spacer(minLength: 0)

@@ -12,10 +12,10 @@ The product page lives in the private repo `beeXperts-Niko/flow-site`, checked o
 
 On every user-visible change, before finishing:
 - bump the version
-- add a changelog entry on the product page, newest first: German in `../flow-site/index.html`, English keys in `../flow-site/i18n.js`
-- point every download link at `Flow-<version>.pkg` (header, hero, download, impressum)
+- add a changelog entry, newest first: German in `../flow-site/changelog.html` and, for the latest versions, `../flow-site/download.html`; English keys in `../flow-site/i18n.js`
+- point every download link at `Sinthex-Flow-<version>.pkg`: the header button on every `../flow-site/*.html`, the hero and CTA in `index.html`, and `download.html`
 - write `../flow-site/latest.json` with `version` and the absolute `pkg` URL (the app reads this for updates)
-- bump the `i18n.js?v=` query when `../flow-site/i18n.js` changes
+- bump the `i18n.js?v=` query on every `../flow-site/*.html` when `../flow-site/i18n.js` changes
 
 Patch `1.1.x`: fix, copy, layout. No new capability.
 Minor `1.x.0`: a new capability. Reset patch to 0.
@@ -33,7 +33,7 @@ Format placeholders are `String(format:)` with `%@`, `%ld` for `Int`, `%.1f` for
 Catalog: `Languages/<bcp47>.json`, flat `[String: String]`. `en.json` is the key list and the fallback. `de.json` is German. Keys starting with `_` are ignored. Keep both files on the same key set.
 
 `scripts/build_app.sh` copies `Languages/*.json` into `Contents/Resources/Languages` and `packaging/*.lproj` into Resources.
-The app also reads `~/Library/Application Support/Flow/Languages`. Later directories override the same keys. Scan is at launch, not live. No language list in code. Filename is the code (`de.json`, `pt-BR.json`).
+The app also reads `~/Library/Application Support/Sinthex Flow/Languages`. Later directories override the same keys. Scan is at launch, not live. No language list in code. Filename is the code (`de.json`, `pt-BR.json`).
 
 Selection uses only `Locale.preferredLanguages.first`: full tag, then language. A hit wins. If that language is `de` and `de.json` exists, use German. Every other miss uses English. A missing key in the chosen file falls back to the English string, then the key.
 

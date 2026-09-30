@@ -4,7 +4,12 @@
 set -euo pipefail
 
 NAME="Flow Local Code Signing"
-SUPPORT="${HOME}/Library/Application Support/Flow"
+SUPPORT="${HOME}/Library/Application Support/Sinthex Flow"
+LEGACY="${HOME}/Library/Application Support/Flow"
+# Until the app has moved its data folder, the certificate still lives under the old name.
+if [[ ! -d "$SUPPORT/signing" && -d "$LEGACY/signing" ]]; then
+  SUPPORT="$LEGACY"
+fi
 CERT_DIR="$SUPPORT/signing"
 P12="$CERT_DIR/flow-signing.p12"
 CRT="$CERT_DIR/flow-signing.crt"

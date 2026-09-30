@@ -21,6 +21,7 @@ enum EngineState {
 
 enum MainSection: String, CaseIterable, Identifiable {
     case home
+    case commands
     case history
     case style
     case dictionary
@@ -31,6 +32,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .home: return L10n.s("nav.home")
+        case .commands: return L10n.s("nav.commands")
         case .history: return L10n.s("nav.history")
         case .style: return L10n.s("nav.style")
         case .dictionary: return L10n.s("nav.dictionary")
@@ -41,6 +43,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .home: return "house"
+        case .commands: return "wand.and.stars"
         case .history: return "clock.arrow.circlepath"
         case .style: return "textformat"
         case .dictionary: return "character.book.closed"
@@ -78,6 +81,10 @@ final class AppState: ObservableObject {
             guard config != oldValue else { return }
             config.save()
             configChanged?(oldValue, config)
+            if oldValue.historyKeepDays != config.historyKeepDays
+                || oldValue.historyMaxEntries != config.historyMaxEntries {
+                pruneHistory()
+            }
         }
     }
     @Published private(set) var history: [HistoryEntry]
@@ -92,8 +99,14 @@ final class AppState: ObservableObject {
     private var updateTask: Task<Void, Never>?
 
     init() {
-        config = FlowConfig.load()
-        history = HistoryStore.load()
+        let loadedConfig = FlowConfig.load()
+        let loaded = HistoryStore.load()
+        let trimmed = loadedConfig.trimmedHistory(loaded)
+        history = trimmed
+        config = loadedConfig
+        if trimmed.count != loaded.count {
+            HistoryStore.save(trimmed)
+        }
     }
 
     var isBusy: Bool {
@@ -333,7 +346,14 @@ final class AppState: ObservableObject {
 
     func addHistory(_ entry: HistoryEntry) {
         history.insert(entry, at: 0)
-        if history.count > 500 { history = Array(history.prefix(500)) }
+        history = config.trimmedHistory(history)
+        HistoryStore.save(history)
+    }
+
+    func pruneHistory() {
+        let next = config.trimmedHistory(history)
+        guard next != history else { return }
+        history = next
         HistoryStore.save(history)
     }
 

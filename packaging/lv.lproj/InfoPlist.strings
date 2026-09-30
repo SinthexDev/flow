@@ -1,2 +1,4 @@
-"NSMicrophoneUsageDescription" = "Flow izmanto mikrofonu, lai diktātu atpazītu lokāli šajā Mac.";
-"NSAppleEventsUsageDescription" = "Flow ievieto diktēto tekstu aktīvajā lietotnē.";
+"CFBundleDisplayName" = "Sinthex Flow";
+"CFBundleName" = "Sinthex Flow";
+"NSMicrophoneUsageDescription" = "Sinthex Flow izmanto mikrofonu, lai diktātu atpazītu lokāli šajā Mac.";
+"NSAppleEventsUsageDescription" = "Sinthex Flow ievieto diktēto tekstu aktīvajā lietotnē.";

@@ -1,10 +1,10 @@
 ---
-description: Flow-Version veröffentlichen — ChangeLog, Webseite, Sprachen, Screenshots, Download und Auto-Updater
+description: Sinthex-Flow-Version veröffentlichen — ChangeLog, Webseite, Sprachen, Screenshots, Download und Auto-Updater
 ---
 
 # deployVersion
 
-Veröffentliche die Flow-Version, die in `packaging/Info.plist` steht, auf https://sinthex.de/flow/. Download und Auto-Updater lesen dieselbe Fassung: die Seite verlinkt `Flow-<version>.pkg`, `../flow-site/latest.json` zeigt auf die absolute Paket-URL.
+Veröffentliche die Sinthex-Flow-Version, die in `packaging/Info.plist` steht, auf https://sinthex.de/flow/. Download und Auto-Updater lesen dieselbe Fassung: die Seite verlinkt `Sinthex-Flow-<version>.pkg`, `../flow-site/latest.json` zeigt auf die absolute Paket-URL.
 
 Nicht committen und nicht pushen, außer der Nutzer hat das in derselben Anfrage verlangt.
 
@@ -44,23 +44,24 @@ Neueste Version zuerst, an diesen Stellen:
 - `../flow-site/changelog.html`: vollständiger Verlauf. Sichtbarer Text Deutsch, `data-i18n` auf die Schlüssel. Aufbau wie der bestehende `<article class="version">`.
 - `../flow-site/i18n.js`: englische Zeichenketten derselben Schlüssel, im Objekt `en`, bei den anderen `log.v…`-Schlüsseln.
 - `../flow-site/changelog.md`: vollständiger Verlauf auf Englisch, mit **New**, **Improvement**, **Bugfix**, **Other**.
-- `../flow-site/index.html`, Block `#aenderungen`: die aktuelle Version, danach ältere Versionen, die mindestens einen Punkt der Art Neu haben, bis drei Artikel dastehen. Die aktuelle Version steht auch dann ganz oben, wenn sie keinen Neu-Punkt hat. Bugfix- und Sonstiges-Versionen bleiben im vollständigen ChangeLog.
+- `../flow-site/download.html`, Block `#aenderungen`: die aktuelle Version, danach ältere Versionen, die mindestens einen Punkt der Art Neu haben, bis drei Artikel dastehen. Die aktuelle Version steht auch dann ganz oben, wenn sie keinen Neu-Punkt hat. Bugfix- und Sonstiges-Versionen bleiben im vollständigen ChangeLog.
 - `../flow-site/index.md`, Abschnitt „Changelog (latest features)“: dieselben drei Versionen, je eine englische Zeile.
 
 ## 3. Webseite auf diese Version stellen
 
-Überall, wo die herunterladbare Fassung genannt wird, auf `Flow-<version>.pkg` und die Versionsnummer zeigen. Historische Versionsnummern im ChangeLog bleiben.
+Überall, wo die herunterladbare Fassung genannt wird, auf `Sinthex-Flow-<version>.pkg` und die Versionsnummer zeigen. Historische Versionsnummern im ChangeLog bleiben.
 
 Mindestens:
 
-- `../flow-site/index.html`: JSON-LD `softwareVersion`, `downloadUrl`, `installUrl`, Offer-URL, FAQ-Antwort, Download-Links in Kopf, Hero und Installer-Abschnitt, Satz „Flow <version> legt die App…“, `dateModified`
-- `../flow-site/changelog.html` und `../flow-site/impressum.html`: Download-Link im Kopf
+- `../flow-site/index.html`: JSON-LD `softwareVersion`, `downloadUrl`, `installUrl`, Offer-URL, FAQ-Antwort, Download-Links in Kopf, Hero und Abschluss-Band, `dateModified`
+- `../flow-site/download.html`: Titel und Meta mit Version, Eyebrow „Version <version>“, Download-Links in Kopf, Seitenkopf und Installer-Abschnitt, Satz „Sinthex Flow <version> legt die App…“, ChangeLog-Auszug `#aenderungen`
+- `../flow-site/befehle.html`, `korrektur.html`, `privatsphaere.html`, `changelog.html`, `impressum.html`: Download-Link im Kopf
 - `../flow-site/i18n.js`: `start.pkgBody`, `start.pkgBtn`, `faq.a6`
 - `../flow-site/index.md`, `../flow-site/changelog.md`, `../flow-site/llms.txt`: aktuelle Version und Paket-URL
-- `../flow-site/latest.json`: `version` und `pkg` als `https://sinthex.de/flow/Flow-<version>.pkg`
+- `../flow-site/latest.json`: `version` und `pkg` als `https://sinthex.de/flow/Sinthex-Flow-<version>.pkg`
 - `../flow-site/sitemap.xml`: `lastmod` der geänderten URLs
 
-Wenn `../flow-site/i18n.js` sich ändert, `i18n.js?v=` in `index.html`, `changelog.html` und `impressum.html` um 1 erhöhen. Dieselbe Zahl an allen drei Stellen.
+Wenn `../flow-site/i18n.js` sich ändert, `i18n.js?v=` in jeder `../flow-site/*.html` um 1 erhöhen. Überall dieselbe Zahl. Für `styles.css?v=` und `script.js?v=` gilt dasselbe.
 
 In `../flow-site/.htaccess` muss `latest.json` ungecacht ausgeliefert werden. Fehlt der Block, ergänzen:
 
@@ -97,9 +98,9 @@ Entscheiden, nicht pauschal neu aufnehmen. Ein Bild wird ersetzt, wenn diese Ver
 | `HistoryView` | `../flow-site/assets/verlauf.png` | `docs/screenshots/main-history.png` |
 | `SettingsView` | `../flow-site/assets/einstellungen.png` | `docs/screenshots/main-settings-full.png` |
 
-Nur die betroffenen Paare neu aufnehmen. Pixelmaße der bestehenden Datei beibehalten (`sips -g pixelWidth -g pixelHeight`). Ändert sich die Größe, `width` und `height` in `../flow-site/index.html` mitziehen.
+Nur die betroffenen Paare neu aufnehmen. Pixelmaße der bestehenden Datei beibehalten (`sips -g pixelWidth -g pixelHeight`). Ändert sich die Größe, `width` und `height` in der HTML-Seite mitziehen, die das Bild zeigt (`rg -l <datei>.png ../flow-site/*.html`). Beim Einstellungsbild auch den Ausschnitt `.crop-frame` / `.crop-settings` in `styles.css` prüfen.
 
-Aufnahme, wenn sie nötig ist: `./scripts/build_app.sh`, laufendes Flow beenden, `open dist/Flow.app`, Fenster mit `screencapture -l <fensterId> -o` ohne Schatten aufnehmen, App beenden. Dieselbe Aufnahme in beide Dateien des Paares legen. Die Fenster-ID der Flow-Fenster über Quartz `CGWindowListCopyWindowInfo` holen.
+Aufnahme, wenn sie nötig ist: `./scripts/build_app.sh`, laufendes Sinthex Flow beenden, `open "dist/Sinthex Flow.app"`, Fenster mit `screencapture -l <fensterId> -o` ohne Schatten aufnehmen, App beenden. Dieselbe Aufnahme in beide Dateien des Paares legen. Die Fenster-ID der Sinthex-Flow-Fenster über Quartz `CGWindowListCopyWindowInfo` holen.
 
 ## 6. Paket bauen und online stellen
 
@@ -110,14 +111,14 @@ Sprachdateien und Screenshots sind vorher fertig. Dann:
 ./scripts/publish_site.sh
 ```
 
-`publish_site.sh` lädt `../flow-site/` nach `sinthex:hosting/sinthex.de/flow/` und dazu `dist/Flow-<version>.pkg`. Ältere Pakete auf dem Server bleiben. Das Skript bricht ab, wenn `latest.json`, die Sprachschlüssel oder die Paketgröße nicht zur Version passen.
+`publish_site.sh` lädt `../flow-site/` nach `sinthex:hosting/sinthex.de/flow/` und dazu `dist/Sinthex-Flow-<version>.pkg`. Ältere Pakete auf dem Server bleiben. Das Skript bricht ab, wenn `latest.json`, die Sprachschlüssel oder die Paketgröße nicht zur Version passen.
 
 ## 7. Prüfen
 
 Das Skript prüft Feed, Paketgröße und den Download-Link auf der Startseite. Zusätzlich die live Seite im Browser öffnen und durchklicken:
 
-- https://sinthex.de/flow/ — Hero- und Installer-Link laden `Flow-<version>.pkg`
-- der ChangeLog-Block zeigt die neue Version
+- https://sinthex.de/flow/ — Hero-Link lädt `Sinthex-Flow-<version>.pkg`
+- https://sinthex.de/flow/download.html — Installer-Links laden dasselbe Paket, der ChangeLog-Auszug zeigt die neue Version
 - https://sinthex.de/flow/changelog.html zeigt denselben Eintrag
 - https://sinthex.de/flow/latest.json hat `version` und die absolute `pkg`-URL
 

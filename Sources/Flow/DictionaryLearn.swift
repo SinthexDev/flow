@@ -91,9 +91,18 @@ enum DictionaryEdits {
         return hunks
     }
 
+    /// Quotes, periods and other marks around a word — not part of the lemma.
+    private static let edgeMarks = CharacterSet.punctuationCharacters
+        .union(.symbols)
+        .union(.whitespacesAndNewlines)
+
+    private static func bareWord(_ text: String) -> String {
+        text.trimmingCharacters(in: edgeMarks)
+    }
+
     private static func item(from heard: String, to term: String) -> DictionaryItem? {
-        let from = heard.trimmingCharacters(in: .whitespacesAndNewlines)
-        let to = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        let from = bareWord(heard)
+        let to = bareWord(term)
         guard !from.isEmpty, !to.isEmpty, from != to else { return nil }
         guard from.count <= 48, to.count <= 48 else { return nil }
         if from.compare(to, options: .caseInsensitive) == .orderedSame {

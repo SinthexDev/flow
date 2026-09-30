@@ -9,6 +9,9 @@ if let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.cou
     exit(0)
 }
 
+if LegacyName.relocateIfNeeded() { exit(0) }
+LegacyName.removeOldBundle()
+
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)

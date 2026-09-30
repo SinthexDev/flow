@@ -5,6 +5,9 @@ let package = Package(
     name: "Flow",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Flow")
+        .executableTarget(
+            name: "Flow",
+            linkerSettings: [.linkedFramework("IOKit")]
+        )
     ]
 )

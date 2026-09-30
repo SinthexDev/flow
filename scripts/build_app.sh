@@ -1,10 +1,11 @@
 #!/bin/bash
-# Builds dist/Flow.app: release binary, icon, bundled engine sources + first-run setup script,
+# Builds "dist/Sinthex Flow.app": release binary, icon, bundled engine sources + first-run setup script,
 # signed with the stable local identity. Prints the identity hash on the last line.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-STAGE="$ROOT/dist/Flow.app"
+STAGE="$ROOT/dist/Sinthex Flow.app"
+EXE="$STAGE/Contents/MacOS/Sinthex Flow"
 RES="$STAGE/Contents/Resources"
 
 cd "$ROOT"
@@ -14,7 +15,8 @@ IDENTITY="$("$ROOT/scripts/ensure_signing_identity.sh")"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$RES"
-cp "$ROOT/.build/release/Flow" "$STAGE/Contents/MacOS/Flow"
+rm -rf "$ROOT/dist/Flow.app"
+cp "$ROOT/.build/release/Flow" "$EXE"
 cp "$ROOT/packaging/Info.plist" "$STAGE/Contents/Info.plist"
 cp "$ROOT/packaging/AppIcon.icns" "$RES/AppIcon.icns"
 mkdir -p "$RES/Languages"
@@ -25,7 +27,7 @@ for lproj in "$ROOT/packaging/"*.lproj; do
   cp -R "$lproj" "$RES/$name"
 done
 printf 'APPL????' > "$STAGE/Contents/PkgInfo"
-chmod +x "$STAGE/Contents/MacOS/Flow"
+chmod +x "$EXE"
 
 # Engine sources; the app installs them into its own Python environment on first launch.
 rsync -a --delete \

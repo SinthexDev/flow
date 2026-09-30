@@ -1,5 +1,5 @@
 #!/bin/bash
-# Bundled in Flow.app/Contents/Resources. Flow runs it on first launch and whenever the bundled
+# Bundled in "Sinthex Flow.app"/Contents/Resources. The app runs it on first launch and whenever the bundled
 # engine version changes. Args: <engine source dir> <support dir> <engine version>
 set -euo pipefail
 
@@ -10,7 +10,7 @@ VERSION="$3"
 # GUI apps start with a minimal PATH.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-echo "== Flow-Engine einrichten ($VERSION)"
+echo "== Sinthex-Flow-Engine einrichten ($VERSION)"
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "Installiere uv (Python-Paketmanager)…"

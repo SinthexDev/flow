@@ -33,11 +33,11 @@ def support_dir() -> Path:
     override = os.environ.get("FLOW_SUPPORT")
     if override:
         return Path(override)
-    return Path.home() / "Library" / "Application Support" / "Flow"
+    return Path.home() / "Library" / "Application Support" / "Sinthex Flow"
 
 
 def configure_cache() -> None:
-    """Whisper-Gewichte liegen im Flow-Ordner, nicht im allgemeinen Hugging-Face-Cache."""
+    """Whisper-Gewichte liegen im Sinthex-Flow-Ordner, nicht im allgemeinen Hugging-Face-Cache."""
     root = support_dir() / "models"
     hub = root / "hub"
     hub.mkdir(parents=True, exist_ok=True)

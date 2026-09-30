@@ -13,11 +13,17 @@ struct HistoryView: View {
                     Button(role: .destructive) {
                         confirmClear = true
                     } label: {
-                        Label(L10n.s("history.clear"), systemImage: "trash")
+                        HStack(spacing: 6) {
+                            Image(systemName: "trash")
+                            Text(L10n.s("history.clear"))
+                        }
                     }
                     .buttonStyle(SoftButtonStyle())
+                    .fixedSize()
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(1)
         } content: {
             if state.history.isEmpty {
                 EmptyHint(
@@ -45,6 +51,7 @@ struct HistoryView: View {
                 }
             }
         }
+        .onAppear { state.pruneHistory() }
         .confirmationDialog(L10n.s("history.deleteTitle"), isPresented: $confirmClear) {
             Button(L10n.s("history.delete"), role: .destructive) {
                 withAnimation { state.clearHistory() }

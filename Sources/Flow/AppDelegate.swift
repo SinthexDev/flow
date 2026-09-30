@@ -94,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
                 self?.state.checkForUpdate()
             }
+            InstallPing.sendIfNeeded(enabled: state.config.countInstall)
         }
     }
 
@@ -254,6 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if old.learnEdits != new.learnEdits, !new.learnEdits {
             dictionaryLearner.stop()
+        }
+        if old.countInstall != new.countInstall, new.countInstall {
+            InstallPing.sendIfNeeded(enabled: true)
         }
     }
 
@@ -737,7 +741,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "Flow"
+            window.title = L10n.appName
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true
@@ -760,7 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "Willkommen"
+            window.title = L10n.s("onboarding.welcome")
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true

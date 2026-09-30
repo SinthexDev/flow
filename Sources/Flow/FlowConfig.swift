@@ -29,12 +29,21 @@ struct FlowConfig: Codable, Equatable {
     var othersAudio: String
     /// Kurze Korrekturen am eingesetzten Text ins Wörterbuch übernehmen.
     var learnEdits: Bool
+    /// Once, send a hash of this Mac’s hardware UUID to Sinthex.
+    var countInstall: Bool
     var launchAtLogin: Bool
     var onboarded: Bool
     var port: Int
     /// Widget-Mitte relativ zum sichtbaren Bildschirm (0…1). nil = Standard unten mittig.
     var widgetX: Double?
     var widgetY: Double?
+    /// 0 = unbegrenzt. Sonst werden ältere Einträge nach so vielen Tagen entfernt.
+    var historyKeepDays: Int = 0
+    /// 0 = unbegrenzt. Sonst bleiben nur so viele neueste Einträge.
+    var historyMaxEntries: Int = 500
+
+    static let historyKeepChoices = [0, 7, 30, 90, 365]
+    static let historyLimitChoices = [50, 100, 250, 500, 1000, 0]
 
     static let defaultModel = (NSHomeDirectory() as NSString)
         .appendingPathComponent("Models/Qwen3.8-27B-Uncensored-MLX/4-bit")
@@ -60,6 +69,7 @@ struct FlowConfig: Codable, Equatable {
         playSounds: true,
         othersAudio: OthersAudio.mute.rawValue,
         learnEdits: true,
+        countInstall: true,
         launchAtLogin: false,
         onboarded: false,
         port: 17321,
@@ -85,6 +95,7 @@ struct FlowConfig: Codable, Equatable {
         playSounds: Bool,
         othersAudio: String,
         learnEdits: Bool,
+        countInstall: Bool,
         launchAtLogin: Bool,
         onboarded: Bool,
         port: Int,
@@ -108,6 +119,7 @@ struct FlowConfig: Codable, Equatable {
         self.playSounds = playSounds
         self.othersAudio = othersAudio
         self.learnEdits = learnEdits
+        self.countInstall = countInstall
         self.launchAtLogin = launchAtLogin
         self.onboarded = onboarded
         self.port = port
@@ -149,11 +161,14 @@ struct FlowConfig: Codable, Equatable {
             othersAudio = (muted ? OthersAudio.mute : OthersAudio.off).rawValue
         }
         learnEdits = try c.decodeIfPresent(Bool.self, forKey: .learnEdits) ?? true
+        countInstall = try c.decodeIfPresent(Bool.self, forKey: .countInstall) ?? true
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         onboarded = try c.decodeIfPresent(Bool.self, forKey: .onboarded) ?? d.onboarded
         port = try c.decodeIfPresent(Int.self, forKey: .port) ?? d.port
         widgetX = try c.decodeIfPresent(Double.self, forKey: .widgetX)
         widgetY = try c.decodeIfPresent(Double.self, forKey: .widgetY)
+        historyKeepDays = max(0, try c.decodeIfPresent(Int.self, forKey: .historyKeepDays) ?? 0)
+        historyMaxEntries = max(0, try c.decodeIfPresent(Int.self, forKey: .historyMaxEntries) ?? 500)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -178,16 +193,19 @@ struct FlowConfig: Codable, Equatable {
         try c.encode(othersAudio, forKey: .othersAudio)
         try c.encode(othersAudio != OthersAudio.off.rawValue, forKey: .muteOthers)
         try c.encode(learnEdits, forKey: .learnEdits)
+        try c.encode(countInstall, forKey: .countInstall)
         try c.encode(launchAtLogin, forKey: .launchAtLogin)
         try c.encode(onboarded, forKey: .onboarded)
         try c.encode(port, forKey: .port)
         try c.encodeIfPresent(widgetX, forKey: .widgetX)
         try c.encodeIfPresent(widgetY, forKey: .widgetY)
+        try c.encode(historyKeepDays, forKey: .historyKeepDays)
+        try c.encode(historyMaxEntries, forKey: .historyMaxEntries)
     }
 
     private enum CodingKeys: String, CodingKey {
         case modelPath, whisperModel, polishProvider, openAIModel, correctionBaseURL, correctionKind, didChooseModel, appStyles, language, nativeLanguage, style, instructions, dictionary
-        case commandMode, autoCorrect, hotkey, playSounds, muteOthers, othersAudio, learnEdits, launchAtLogin, onboarded, port, widgetX, widgetY
+        case commandMode, autoCorrect, hotkey, playSounds, muteOthers, othersAudio, learnEdits, countInstall, launchAtLogin, onboarded, port, widgetX, widgetY, historyKeepDays, historyMaxEntries
     }
 
     static var snapshotDemo: FlowConfig {
@@ -197,7 +215,7 @@ struct FlowConfig: Codable, Equatable {
         config.openAIModel = "auto"
         config.didChooseModel = true
         config.onboarded = true
-        config.dictionary = "flow app -> Flow\nsinthex -> Sinthex"
+        config.dictionary = "sintex flow -> Sinthex Flow\nbeexperts -> beeXperts"
         config.appStyles = [
             AppStyleProfile(bundleID: "com.apple.mail", name: "Mail", style: "email", suggested: "email", customized: false),
             AppStyleProfile(bundleID: "com.apple.MobileSMS", name: "Nachrichten", style: "chat", suggested: "chat", customized: false),
@@ -268,16 +286,42 @@ struct FlowConfig: Codable, Equatable {
         }
         return correctsWithOpenAI && hasKey
     }
+
+    func trimmedHistory(_ entries: [HistoryEntry], now: Date = Date()) -> [HistoryEntry] {
+        var items = entries
+        if historyKeepDays > 0 {
+            let cutoff = Calendar.current.date(byAdding: .day, value: -historyKeepDays, to: now) ?? now
+            items = items.filter { $0.date >= cutoff }
+        }
+        if historyMaxEntries > 0, items.count > historyMaxEntries {
+            items = Array(items.prefix(historyMaxEntries))
+        }
+        return items
+    }
 }
 
 enum SupportPaths {
-    static var directory: URL {
-        let url = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Flow", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    static let folderName = "Sinthex Flow"
+    static let legacyFolderName = "Flow"
+
+    /// Builds before the rename kept everything in `Flow`. The first launch moves it over,
+    /// and the engine is set up again because the virtual environment moved with it.
+    static let directory: URL = {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let url = base.appendingPathComponent(folderName, isDirectory: true)
+        let legacy = base.appendingPathComponent(legacyFolderName, isDirectory: true)
+        if SnapshotMode.isActive { return url }
+        let visible = (try? fm.contentsOfDirectory(atPath: url.path))?.filter { !$0.hasPrefix(".") } ?? []
+        if visible.isEmpty, fm.fileExists(atPath: legacy.path) {
+            try? fm.removeItem(at: url)
+            if (try? fm.moveItem(at: legacy, to: url)) != nil {
+                try? fm.removeItem(at: url.appendingPathComponent("engine.version"))
+            }
+        }
+        try? fm.createDirectory(at: url, withIntermediateDirectories: true)
         return url
-    }
+    }()
 
     static var config: URL { directory.appendingPathComponent("config.json") }
     static var history: URL { directory.appendingPathComponent("history.json") }

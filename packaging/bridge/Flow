@@ -1,0 +1,40 @@
+#!/bin/bash
+# Update bridge for builds up to 1.9.2. Their updater only accepts a bundle named Flow.app,
+# installs this one and opens it. It puts "Sinthex Flow.app" beside itself and removes itself.
+here="$(cd "$(dirname "$0")/../.." && pwd)"
+parent="$(dirname "$here")"
+src="$here/Contents/Resources/Sinthex Flow.app"
+new="$parent/Sinthex Flow.app"
+log="${HOME}/Library/Logs/Sinthex Flow-update.log"
+mkdir -p "$(dirname "$log")"
+
+swap() {
+  rm -rf "$2.incoming"
+  /usr/bin/ditto "$1" "$2.incoming" || return 1
+  rm -rf "$2"
+  mv "$2.incoming" "$2"
+  /usr/bin/xattr -dr com.apple.quarantine "$2" 2>/dev/null || true
+  rm -rf "$3"
+}
+
+{
+  echo "== $(date '+%Y-%m-%d %H:%M:%S') Brücke: $here -> $new"
+  if [[ -w "$parent" ]] && swap "$src" "$new" "$here"; then
+    echo "OK"
+  else
+    owner="$(id -un)"
+    group="$(id -gn)"
+    script="$(declare -f swap); swap \"\$1\" \"\$2\" \"\$3\" && /usr/sbin/chown -R \"\$4:\$5\" \"\$2\""
+    /usr/bin/osascript - "$script" "$src" "$new" "$here" "$owner" "$group" <<'OSA' || exit 1
+on run argv
+  set cmd to "/bin/bash -c " & quoted form of (item 1 of argv) & " bridge"
+  repeat with i from 2 to 6
+    set cmd to cmd & " " & quoted form of (item i of argv)
+  end repeat
+  do shell script cmd with administrator privileges
+end run
+OSA
+    echo "OK (Administrator)"
+  fi
+  /usr/bin/open "$new"
+} >>"$log" 2>&1

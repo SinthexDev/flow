@@ -1,2 +1,4 @@
-"NSMicrophoneUsageDescription" = "Flow käyttää mikrofonia sanelun tunnistamiseen paikallisesti tällä Macilla.";
-"NSAppleEventsUsageDescription" = "Flow lisää sanellun tekstin aktiiviseen sovellukseen.";
+"CFBundleDisplayName" = "Sinthex Flow";
+"CFBundleName" = "Sinthex Flow";
+"NSMicrophoneUsageDescription" = "Sinthex Flow käyttää mikrofonia sanelun tunnistamiseen paikallisesti tällä Macilla.";
+"NSAppleEventsUsageDescription" = "Sinthex Flow lisää sanellun tekstin aktiiviseen sovellukseen.";

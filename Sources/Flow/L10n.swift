@@ -1,7 +1,7 @@
 import Foundation
 
 /// UI strings from `Languages/<code>.json`.
-/// Bundle copies and `~/Library/Application Support/Flow/Languages` are both scanned.
+/// Bundle copies and `~/Library/Application Support/Sinthex Flow/Languages` are both scanned.
 /// A file in Application Support overrides the same keys from the bundle.
 /// System language is used when a file exists. Otherwise German stays German, and every other language uses English.
 enum L10n {
@@ -15,6 +15,8 @@ enum L10n {
     static func s(_ key: String, _ args: CVarArg...) -> String {
         String(format: s(key), locale: locale, arguments: args)
     }
+
+    static let appName = "Sinthex Flow"
 
     static var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""

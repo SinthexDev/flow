@@ -25,6 +25,7 @@ struct MainView: View {
     private var detail: some View {
         switch state.section {
         case .home: HomeView()
+        case .commands: CommandsView()
         case .history: HistoryView()
         case .style: StyleView()
         case .dictionary: DictionaryView()
@@ -41,7 +42,7 @@ private struct Sidebar: View {
             HStack(spacing: 11) {
                 FlowMark(size: 32)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Flow")
+                    Text(L10n.appName)
                         .font(.system(size: 16, weight: .bold, design: .rounded))
                     Text(L10n.s("main.local"))
                         .font(.system(size: 11))
@@ -73,6 +74,7 @@ private struct SidebarItem: View {
     let section: MainSection
     @EnvironmentObject var state: AppState
     @State private var hovering = false
+    @AppStorage(CommandsView.seenKey) private var commandsSeen = false
 
     var body: some View {
         let selected = state.section == section
@@ -90,6 +92,14 @@ private struct SidebarItem: View {
                     Text("\(state.history.count)")
                         .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
+                }
+                if section == .commands, !commandsSeen || SnapshotMode.isActive, !selected {
+                    Text(L10n.s("nav.new"))
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Theme.gradient))
                 }
             }
             .padding(.horizontal, 10)
