@@ -61,8 +61,11 @@ def transcribe_wav(
     if language and language != "auto":
         options["language"] = language
     prompt = initial_prompt.strip()
+    if len(prompt) > 800:
+        cut = prompt.rfind(", ", 0, 801)
+        prompt = prompt[:cut] if cut > 0 else prompt[:800]
     if prompt:
-        options["initial_prompt"] = prompt[:800]
+        options["initial_prompt"] = prompt
     result = mlx_whisper.transcribe(wav_to_audio(wav), **options)
 
     segments = result.get("segments") or []

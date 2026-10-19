@@ -684,7 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func applyLearned(_ learned: [DictionaryItem]) {
         var items = DictionaryItem.parse(state.config.dictionary)
         var added: [DictionaryItem] = []
-        for item in learned {
+        for item in learned where item.isKept {
             let exists = items.contains {
                 $0.term.caseInsensitiveCompare(item.term) == .orderedSame
                     && $0.heardAs.caseInsensitiveCompare(item.heardAs) == .orderedSame

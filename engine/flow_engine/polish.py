@@ -45,6 +45,18 @@ LANG_NAMES = {
     "tr": "Türkisch",
 }
 
+# Kurze Funktionswörter. Eine Ersetzung davon trifft fast jeden Satz.
+_STOPWORDS = frozenset({
+    "das", "der", "die", "den", "dem", "des", "ein", "eine", "einer", "einem",
+    "einen", "eines", "mein", "meine", "meinem", "meinen", "meiner",
+    "dein", "deine", "sein", "seine", "ihr", "ihre", "und", "oder", "aber",
+    "nicht", "auch", "noch", "nur", "schon", "dann", "wenn", "dass", "ist",
+    "sind", "war", "hat", "haben", "wird", "werden", "ich", "du", "er", "sie",
+    "es", "wir", "man", "mit", "von", "zu", "auf", "für", "fur", "im", "in",
+    "an", "am", "als", "wie", "doch", "mal", "the", "and", "for", "you", "your",
+    "this", "that", "with", "was", "are",
+})
+
 
 def parse_dictionary(text: str) -> tuple[list[str], list[tuple[str, str]]]:
     hints: list[str] = []
@@ -63,20 +75,184 @@ def parse_dictionary(text: str) -> tuple[list[str], list[tuple[str, str]]]:
     return hints, rules
 
 
+def _letters(text: str) -> str:
+    return "".join(ch for ch in text.casefold() if ch.isalpha())
+
+
+def _quotes_ok(text: str) -> bool:
+    if text.count('"') % 2:
+        return False
+    if text.count("„") != text.count("“"):
+        return False
+    return text.count("«") == text.count("»")
+
+
+def _show(term: str) -> str:
+    return term.strip().strip("\"'„“”«»").strip()
+
+
+def usable_hint(term: str) -> bool:
+    if not term or not _quotes_ok(term):
+        return False
+    folded = _letters(_show(term))
+    return len(folded) >= 3 and folded not in _STOPWORDS
+
+
+def usable_rule(src: str, dst: str) -> bool:
+    """Echte Schreibweisen. Reine Großschreibung und Wörter wie „das“ bleiben außen vor."""
+    if not _quotes_ok(src) or not _quotes_ok(dst):
+        return False
+    left, right = _letters(src), _letters(dst)
+    if len(left) < 3 or len(right) < 3 or left == right:
+        return False
+    return left not in _STOPWORDS and right not in _STOPWORDS
+
+
 def weighted_terms(text: str) -> list[str]:
     """Begriffe, die Whisper und die Korrektur bevorzugen sollen."""
     hints, rules = parse_dictionary(text)
     terms: list[str] = []
-    for term in hints + [dst for _, dst in rules]:
-        if term and term not in terms:
-            terms.append(term)
+    for term in hints:
+        shown = _show(term)
+        if usable_hint(shown) and shown not in terms:
+            terms.append(shown)
+    for src, dst in rules:
+        shown = _show(dst)
+        if usable_rule(src, dst) and usable_hint(shown) and shown not in terms:
+            terms.append(shown)
     return terms
 
 
+def clip_glossary(terms: list[str], limit: int = 800) -> str:
+    """Whisper nimmt den Text als previous-context, nicht als festes Vokabular."""
+    kept: list[str] = []
+    size = 0
+    for term in terms:
+        extra = len(term) if not kept else len(term) + 2
+        if size + extra > limit:
+            break
+        kept.append(term)
+        size += extra
+    return ", ".join(kept)
+
+
+def _levenshtein(left: str, right: str) -> int:
+    if left == right:
+        return 0
+    if not left:
+        return len(right)
+    if not right:
+        return len(left)
+    previous = list(range(len(right) + 1))
+    for i, a in enumerate(left, start=1):
+        current = [i]
+        for j, b in enumerate(right, start=1):
+            cost = 0 if a == b else 1
+            current.append(min(current[-1] + 1, previous[j] + 1, previous[j - 1] + cost))
+        previous = current
+    return previous[-1]
+
+
+def _close(token: str, term: str) -> bool:
+    left, right = token.casefold(), term.casefold()
+    if left == right:
+        return True
+    if min(len(left), len(right)) < 4:
+        return False
+    distance = _levenshtein(left, right)
+    limit = 1 if max(len(left), len(right)) < 8 else 2
+    return distance <= limit and distance / max(len(left), len(right)) <= 0.34
+
+
+def _mentioned(text: str, term: str) -> bool:
+    folded = text.casefold()
+    if term.casefold() in folded:
+        return True
+    for token in re.findall(r"[^\W\d_]+", text, flags=re.UNICODE):
+        if _close(token, term):
+            return True
+    return False
+
+
+def glossary_lines(dictionary: str, context: str) -> list[str]:
+    """Nur die passenden Einträge. Chat-Modelle haben kein Wörterbuch-Feld."""
+    hints, rules = parse_dictionary(dictionary)
+    hints = [_show(term) for term in hints if usable_hint(_show(term))]
+    rules = [(src, _show(dst)) for src, dst in rules if usable_rule(src, dst)]
+
+    def take(items: list, hit) -> list:
+        if len(items) <= 24:
+            first = [item for item in items if hit(item)]
+            rest = [item for item in items if item not in first]
+            return first + rest
+        first = [item for item in items if hit(item)]
+        rest = [item for item in items if item not in first][:8]
+        return (first + rest)[:24]
+
+    chosen_hints = take(hints, lambda term: _mentioned(context, term))
+    chosen_rules = take(
+        rules,
+        lambda rule: _mentioned(context, rule[0]) or _mentioned(context, rule[1]),
+    )
+    spellings: list[str] = []
+    for term in chosen_hints + [dst for _, dst in chosen_rules]:
+        if term and term not in spellings:
+            spellings.append(term)
+    lines: list[str] = []
+    if spellings:
+        lines.append(
+            "- Schreibe diese Begriffe exakt so, wenn sie gemeint sind: "
+            + ", ".join(spellings)
+            + "."
+        )
+    if chosen_rules:
+        pairs = [f"{src} → {dst}" for src, dst in chosen_rules]
+        lines.append("- Diese Erkennungsfehler ersetzt du: " + "; ".join(pairs) + ".")
+    return lines
+
+
 def apply_rules(text: str, rules: list[tuple[str, str]]) -> str:
-    for src, dst in sorted(rules, key=lambda rule: len(rule[0]), reverse=True):
+    usable = [(src, dst) for src, dst in rules if usable_rule(src, dst)]
+    for src, dst in sorted(usable, key=lambda rule: len(rule[0]), reverse=True):
         pattern = r"\b" + re.escape(src) + r"\b"
         text = re.compile(pattern, re.IGNORECASE).sub(dst, text)
+    return text
+
+
+def apply_fuzzy(text: str, terms: list[str]) -> str:
+    singles = [term for term in terms if term and " " not in term]
+    if not singles:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        word = match.group(0)
+        exact = [term for term in singles if word.casefold() == term.casefold()]
+        if exact:
+            return exact[0]
+        best: str | None = None
+        best_distance = 99
+        ambiguous = False
+        for term in singles:
+            if not _close(word, term):
+                continue
+            distance = _levenshtein(word.casefold(), term.casefold())
+            if distance < best_distance:
+                best, best_distance = term, distance
+                ambiguous = False
+            elif distance == best_distance:
+                ambiguous = True
+        if ambiguous or best is None:
+            return word
+        return best
+
+    return re.sub(r"[^\W\d_]+", replace, text, flags=re.UNICODE)
+
+
+def apply_dictionary(text: str, dictionary: str, *, fuzzy: bool = False) -> str:
+    _hints, rules = parse_dictionary(dictionary)
+    text = apply_rules(text, rules)
+    if fuzzy:
+        text = apply_fuzzy(text, weighted_terms(dictionary))
     return text
 
 
@@ -118,7 +294,6 @@ def build_messages(
     if selection and selection.strip():
         return build_command_messages(raw, selection, style, instructions, dictionary)
 
-    hints = weighted_terms(dictionary)
     style_text = STYLES.get(style, STYLES["auto"])
     lines = [
         "Du bist die Formulierungsstufe einer Diktier-App.",
@@ -134,8 +309,7 @@ def build_messages(
         "- Gesprochene Satzzeichen wie Komma, Punkt, Fragezeichen, Ausrufezeichen und Doppelpunkt setzt du als Zeichen, wenn sie als Satzzeichen gemeint sind.",
         f"- Stil: {style_text}",
     ]
-    if hints:
-        lines.append("- Schreibe diese Begriffe exakt so: " + ", ".join(hints) + ".")
+    lines.extend(glossary_lines(dictionary, raw))
     extra = instructions.strip()
     if extra:
         lines.append("Zusätzliche Anweisung des Nutzers: " + extra)
@@ -153,7 +327,6 @@ def build_command_messages(
     instructions: str,
     dictionary: str,
 ) -> list[dict[str, str]]:
-    hints = weighted_terms(dictionary)
     lines = [
         "Du bist die Bearbeitungsstufe einer Diktier-App.",
         "Im Textfeld ist Text markiert. Das Gesprochene ist die Anweisung, nicht der neue Text.",
@@ -173,8 +346,7 @@ def build_command_messages(
     }.get(style)
     if tone:
         lines.append("- " + tone)
-    if hints:
-        lines.append("- Schreibe diese Begriffe exakt so: " + ", ".join(hints) + ".")
+    lines.extend(glossary_lines(dictionary, f"{selection}\n{raw}"))
     extra = instructions.strip()
     if extra:
         lines.append("Zusätzliche Anweisung des Nutzers: " + extra)

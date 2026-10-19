@@ -249,6 +249,12 @@ struct FlowConfig: Codable, Equatable {
                 config.save()
             }
         }
+        let parsed = DictionaryItem.parse(config.dictionary)
+        let kept = parsed.filter(\.isKept)
+        if kept.count != parsed.count {
+            config.dictionary = DictionaryItem.serialize(kept)
+            config.save()
+        }
         return config
     }
 
@@ -425,6 +431,48 @@ struct DictionaryItem: Identifiable, Equatable {
         items.map { item in
             item.heardAs.isEmpty ? item.term : "\(item.heardAs) -> \(item.term)"
         }.joined(separator: "\n")
+    }
+
+    /// Gleiche Grenze wie in der Engine: keine reinen Großschreibungen, keine kurzen Funktionswörter.
+    private static let ignoredWords: Set<String> = [
+        "das", "der", "die", "den", "dem", "des", "ein", "eine", "einer", "einem",
+        "einen", "eines", "mein", "meine", "meinem", "meinen", "meiner",
+        "dein", "deine", "sein", "seine", "ihr", "ihre", "und", "oder", "aber",
+        "nicht", "auch", "noch", "nur", "schon", "dann", "wenn", "dass", "ist",
+        "sind", "war", "hat", "haben", "wird", "werden", "ich", "du", "er", "sie",
+        "es", "wir", "man", "mit", "von", "zu", "auf", "für", "fur", "im", "in",
+        "an", "am", "als", "wie", "doch", "mal", "the", "and", "for", "you", "your",
+        "this", "that", "with", "was", "are"
+    ]
+
+    var isKept: Bool {
+        heardAs.isEmpty
+            ? Self.isUsefulHint(term)
+            : Self.isUsefulRule(heard: heardAs, term: term)
+    }
+
+    static func isUsefulHint(_ term: String) -> Bool {
+        guard quotesOk(term) else { return false }
+        let folded = letters(term)
+        return folded.count >= 3 && !ignoredWords.contains(folded)
+    }
+
+    static func isUsefulRule(heard: String, term: String) -> Bool {
+        guard quotesOk(heard), quotesOk(term) else { return false }
+        let left = letters(heard)
+        let right = letters(term)
+        guard left.count >= 3, right.count >= 3, left != right else { return false }
+        return !ignoredWords.contains(left) && !ignoredWords.contains(right)
+    }
+
+    private static func letters(_ text: String) -> String {
+        String(text.lowercased().filter(\.isLetter))
+    }
+
+    private static func quotesOk(_ text: String) -> Bool {
+        if text.filter({ $0 == "\"" }).count % 2 != 0 { return false }
+        if text.filter({ $0 == "„" }).count != text.filter({ $0 == "“" }).count { return false }
+        return text.filter({ $0 == "«" }).count == text.filter({ $0 == "»" }).count
     }
 }
 

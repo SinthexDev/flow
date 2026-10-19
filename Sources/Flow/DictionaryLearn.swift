@@ -105,15 +105,11 @@ enum DictionaryEdits {
         let to = bareWord(term)
         guard !from.isEmpty, !to.isEmpty, from != to else { return nil }
         guard from.count <= 48, to.count <= 48 else { return nil }
-        if from.compare(to, options: .caseInsensitive) == .orderedSame {
-            return DictionaryItem(term: to, heardAs: from)
-        }
-        guard from.count >= 3, to.count >= 2 else { return nil }
+        // Großschreibung und Wörter wie „das“ würden jeden Satz umschreiben.
+        guard DictionaryItem.isUsefulRule(heard: from, term: to) else { return nil }
         let distance = levenshtein(from.lowercased(), to.lowercased())
         let ratio = Double(distance) / Double(max(from.count, to.count))
-        let gainedCapitals = from.rangeOfCharacter(from: .uppercaseLetters) == nil
-            && to.rangeOfCharacter(from: .uppercaseLetters) != nil
-        guard ratio <= 0.45 || (gainedCapitals && ratio <= 0.6) else { return nil }
+        guard ratio <= 0.45 else { return nil }
         return DictionaryItem(term: to, heardAs: from)
     }
 

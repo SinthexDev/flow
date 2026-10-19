@@ -13,10 +13,10 @@ from pathlib import Path
 
 from flow_engine.openai_polish import complete, model_catalog, resolve_model
 from flow_engine.polish import (
-    apply_rules,
+    apply_dictionary,
     build_messages,
     clean_output,
-    parse_dictionary,
+    clip_glossary,
     token_budget,
     weighted_terms,
 )
@@ -121,7 +121,7 @@ class Engine:
                 wav,
                 config.get("whisperModel") or DEFAULT_WHISPER,
                 language or config.get("language") or "auto",
-                ", ".join(terms),
+                clip_glossary(terms),
             )
             self._last_touch = time.perf_counter()
             return {"text": text, "language": detected}
@@ -160,6 +160,8 @@ class Engine:
             target = payload.get("targetLanguage") or None
             if isinstance(target, str):
                 target = target.strip() or None
+            fuzzy = not (selection or target)
+            raw = apply_dictionary(raw, dictionary, fuzzy=fuzzy)
             messages = build_messages(
                 raw, selection, style, instructions, dictionary, target_language=target
             )
@@ -182,9 +184,7 @@ class Engine:
                 text = self._generate_local(messages, budget)
                 elapsed = time.perf_counter() - started
                 print(f"Lokal formuliert in {elapsed:.1f}s", flush=True)
-            text = clean_output(text)
-            _hints, rules = parse_dictionary(dictionary)
-            text = apply_rules(text, rules).strip()
+            text = apply_dictionary(clean_output(text), dictionary, fuzzy=fuzzy).strip()
             return {"text": text}
 
     def _generate_local(self, messages: list[dict[str, str]], max_tokens: int) -> str:
