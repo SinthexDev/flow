@@ -61,6 +61,7 @@ Mindestens:
 - `../flow-site/i18n.js`: `start.pkgBody`, `start.pkgBtn`, `faq.a6`
 - `../flow-site/index.md`, `../flow-site/changelog.md`, `../flow-site/llms.txt`: aktuelle Version und Paket-URL
 - `../flow-site/latest.json`: `version` und `pkg` als `$BASE/Sinthex-Flow-<version>.pkg`, mit dem `BASE` aus `scripts/publish_site.sh`
+- `README.md`: die genannte Version, der Auszug der aktuellen Version und der Installer-Link zeigen auf diese Fassung (`$BASE/Sinthex-Flow-<version>.pkg`). Der Link zur Projektseite und die Changelog-Links bleiben. Der Text bleibt Englisch.
 - `../flow-site/sitemap.xml`: `lastmod` der geänderten URLs
 
 Wenn `../flow-site/i18n.js` sich ändert, `i18n.js?v=` in jeder `../flow-site/*.html` um 1 erhöhen. Überall dieselbe Zahl. Für `styles.css?v=` und `script.js?v=` gilt dasselbe.

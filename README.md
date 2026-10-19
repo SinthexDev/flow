@@ -1,63 +1,74 @@
 # Sinthex Flow
 
-Diktat für die Menüleiste auf dem Mac. Die Sprache bleibt auf dem Gerät. Eine Korrektur über OpenAI ist optional und nutzt den eigenen Schlüssel.
+Dictation for the macOS menu bar. Speech stays on the device. An optional correction step can use your own OpenAI key.
 
-Der angezeigte Name steht in `CFBundleDisplayName`. Die Texte in der App übernehmen ihn.
+The name shown in the app comes from `CFBundleDisplayName`. The interface text follows that name.
 
-**Autor: Sinthex**
+**Author: Sinthex**
 
-Quelltext: <https://github.com/beeXperts-Niko/flow>
+**Version 1.25.1** · [Changelog](https://sinthex.de/flow/changelog.html?lang=en) · [changelog.md](https://sinthex.de/flow/changelog.md)
 
-![Startseite](docs/screenshots/main-home.png)
+Project page: <https://sinthex.de/flow/>  
+Installer: <https://sinthex.de/flow/Sinthex-Flow-1.25.1.pkg>  
+Source: <https://github.com/beeXperts-Niko/flow>
 
-## Was Sinthex Flow tut
+![Home](docs/screenshots/main-home.png)
 
-- Aufnahme über die Fn-Taste, Doppeltipp für freies Sprechen, Esc bricht ab.
-- Erkennung mit Whisper lokal auf Apple Silicon. Audio verlässt den Mac dafür nicht.
-- Optional Korrektur mit dem eigenen OpenAI-Schlüssel. Der Schlüssel liegt im Schlüsselbund, nicht in einer Konfigurationsdatei und nicht in diesem Repository. In den Einstellungen kann statt OpenAI eine andere OpenAI-kompatible Adresse stehen, auch ein lokales Modell. Der Schlüssel bleibt optional und im Schlüsselbund.
-- Das Korrekturmodell wird über den Schlüssel ermittelt. Sinthex Flow empfiehlt das neueste schnelle Modell, ein anderes lässt sich fest einstellen.
-- Der Stil richtet sich nach dem vorderen Programm, zum Beispiel Coding in einer Entwicklungsumgebung und E-Mail in Mail. Pro Programm lässt sich der Stil ändern.
-- Der Text wird in das aktive Feld eingesetzt.
-- Befehlsmodus: Text markieren, Fn halten, den Auftrag sagen. „Übersetz das ins Englische“, „Fass das in einem Satz zusammen“, „Mach das freundlicher“, „Mach daraus eine Stichpunktliste“. Sinthex Flow ersetzt die Markierung durch das Ergebnis. Der Tab „Befehle“ zeigt neun Beispiele.
+## 1.25.1 — 13 October 2026
 
-Sinthex Flow ist eine Menüleisten-App für macOS 14 oder neuer, auf Apple Silicon.
+- **Bugfix** — The dictionary no longer rewrites capitalization-only changes or short words such as “das” and “mein”. Those entries were changing ordinary text.
+- **Improvement** — Names and explicit replacements weigh more in recognition and correction. Close spellings are aligned to the dictionary entry.
 
-Die Oberfläche folgt der ersten Systemsprache. Die Amtssprachen Europas liegen als `Languages/<code>.json` bei, dazu regionale Amtssprachen wie Katalanisch, Baskisch, Gälisch und Rätoromanisch. Die Schlüssel stehen in `en.json`. Fehlt eine Sprache, bleibt Deutsch bei Deutsch und jede andere Sprache wird Englisch. Eine Datei im Ordner `~/Library/Application Support/Sinthex Flow/Languages` ergänzt oder überschreibt dieselbe Sprache und wird beim nächsten Start gelesen. Fehlende Schlüssel fallen auf Englisch zurück.
+The full history is on the [changelog](https://sinthex.de/flow/changelog.html?lang=en).
 
-## Lizenz
+## What Sinthex Flow does
 
-Sinthex Flow steht unter der [MIT-Lizenz](LICENSE).
+- Record with the Fn key. Double-tap for hands-free speech. Esc cancels.
+- Recognition uses Whisper locally on Apple Silicon. That audio does not leave the Mac.
+- Optional correction with your own OpenAI key. The key stays in the Keychain, not in a config file and not in this repository. Settings can point at another OpenAI-compatible address, including a local model. The key stays optional and in the Keychain.
+- The correction model is chosen from the key. Sinthex Flow suggests the latest fast model. You can pin another one.
+- Style follows the frontmost app, for example coding in an editor and email in Mail. Each app can have its own style.
+- The text is inserted into the active field.
+- Command mode: select text, hold Fn, and say what to do. “Translate this into English”, “Summarize this in one sentence”, “Make this friendlier”, “Turn this into a bullet list”. Sinthex Flow replaces the selection with the result. The Commands tab shows nine examples.
+
+Sinthex Flow is a menu-bar app for macOS 14 or newer, on Apple Silicon.
+
+The interface follows the first system language. The official languages of Europe ship as `Languages/<code>.json`, plus regional official languages such as Catalan, Basque, Irish, and Romansh. The keys live in `en.json`. If a language is missing, German stays German and every other language uses English. A file in `~/Library/Application Support/Sinthex Flow/Languages` adds or overrides the same language and is read on the next launch. A missing key falls back to English.
+
+## License
+
+Sinthex Flow is released under the [MIT License](LICENSE).
 
 Copyright (c) 2026 Sinthex.
 
-Das bedeutet: Du darfst Sinthex Flow nutzen, verändern und weitergeben, auch in eigenen Produkten. Bedingung ist, dass der Copyright-Hinweis und der Lizenztext erhalten bleiben. Es gibt keine Gewährleistung. Der vollständige Text steht in [LICENSE](LICENSE).
+You may use, modify, and distribute Sinthex Flow, including in your own products. The copyright notice and the license text must stay intact. There is no warranty. The full text is in [LICENSE](LICENSE).
 
-Sinthex Flow baut auf anderen Open-Source-Projekten auf, vor allem mlx-whisper, MLX, mlx-vlm und den Whisper-Modellgewichten von OpenAI. Deren Lizenzen gelten zusätzlich und sind in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) abgedruckt.
+Sinthex Flow builds on other open-source projects, chiefly mlx-whisper, MLX, mlx-vlm, and the Whisper model weights from OpenAI. Their licenses apply as well and are printed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Privatsphäre
+## Privacy
 
-Es gehören keine API-Schlüssel, Zertifikate, PKCS#12-Dateien oder Diktate in dieses Repository. Der OpenAI-Schlüssel bleibt im macOS-Schlüsselbund (`de.sinthex.flow` / `openai-api-key`). Konfiguration und Verlauf liegen lokal unter `~/Library/Application Support/Sinthex Flow/` und sind von Git ausgeschlossen.
+API keys, certificates, PKCS#12 files, and dictations do not belong in this repository. The OpenAI key stays in the macOS Keychain (`de.sinthex.flow` / `openai-api-key`). Configuration and history stay on the Mac under `~/Library/Application Support/Sinthex Flow/` and are excluded from Git.
 
-## Bauen
+## Build
 
-Voraussetzungen: macOS 14, Apple Silicon, Xcode-Kommandozeilenwerkzeuge, [uv](https://docs.astral.sh/uv/) und Python 3.12.
+Requirements: macOS 14, Apple Silicon, Xcode command-line tools, [uv](https://docs.astral.sh/uv/), and Python 3.12.
 
 ```bash
 ./scripts/install.sh
 ```
 
-Das Skript legt eine virtuelle Umgebung unter `~/Library/Application Support/Sinthex Flow/.venv` an, installiert die Engine, lädt die Whisper-Gewichte und baut `Sinthex Flow.app`.
+The script creates a virtual environment at `~/Library/Application Support/Sinthex Flow/.venv`, installs the engine, downloads the Whisper weights, and builds `Sinthex Flow.app`.
 
-Die lokale Codesign-Identität bleibt über Updates stabil, damit Mikrofon- und Bedienungshilfe-Freigaben nicht jedes Mal neu verlangt werden. Das Passwort für das lokale Zertifikat liegt außerhalb des Repositorys, in `~/Library/Application Support/Sinthex Flow/signing/password` oder in der Umgebungsvariable `FLOW_SIGNING_PASSWORD`.
+The local code-signing identity stays stable across updates, so microphone and accessibility permission are not requested again each time. The password for the local certificate stays outside the repository, in `~/Library/Application Support/Sinthex Flow/signing/password` or in the `FLOW_SIGNING_PASSWORD` environment variable.
 
-Die Engine allein:
+The engine on its own:
 
 ```bash
 uv pip install --python ~/Library/Application\ Support/Sinthex\ Flow/.venv/bin/python ./engine
 ```
 
-Sie hört auf `127.0.0.1:17321`.
+It listens on `127.0.0.1:17321`.
 
 ## Updates
 
-Sinthex Flow liest die Update-Adresse aus `Sources/Flow/UpdateCheck.swift` und lädt von dort die in `latest.json` genannte Paketdatei. Wohin die Seite hochgeladen wird, steht in `scripts/publish_site.sh` (`REMOTE`, `BASE`). Ein Fork trägt an diesen beiden Stellen den eigenen Host ein.
+Sinthex Flow reads its update address from `Sources/Flow/UpdateCheck.swift` and downloads the package named in `latest.json`. Where the site is uploaded is set in `scripts/publish_site.sh` (`REMOTE`, `BASE`). A fork puts its own host in those two places.
