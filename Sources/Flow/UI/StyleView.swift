@@ -109,14 +109,26 @@ struct StyleView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Label(L10n.s("style.language"), systemImage: "globe")
                         .font(.system(size: 14, weight: .semibold))
-                    Picker("", selection: $state.config.language) {
-                        Text(L10n.s("lang.auto")).tag("auto")
-                        Text(L10n.s("lang.de")).tag("de")
-                        Text(L10n.s("lang.en")).tag("en")
+                    if state.config.usesWhistle {
+                        Picker("", selection: $state.config.language) {
+                            ForEach(FlowConfig.whistleLanguages, id: \.self) { code in
+                                Text(L10n.s("lang.\(code)")).tag(code)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    } else {
+                        Picker("", selection: $state.config.language) {
+                            Text(L10n.s("lang.auto")).tag("auto")
+                            Text(L10n.s("lang.de")).tag("de")
+                            Text(L10n.s("lang.en")).tag("en")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    Text(L10n.s("style.languageHint"))
+                    Text(state.config.usesWhistle
+                         ? L10n.s("style.languageHint.whistle")
+                         : L10n.s("style.languageHint"))
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                 }

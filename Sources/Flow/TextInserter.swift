@@ -15,8 +15,13 @@ struct InsertResult {
 
 final class TextInserter {
     private var restoreWork: DispatchWorkItem?
-    /// User clipboard waiting to be restored; reused if a second paste happens before the restore.
-    private var pendingRestore: [[NSPasteboard.PasteboardType: Data]]?
+    /// Textfeld, das beim Start der Aufnahme den Fokus hatte. Der Klick auf
+    /// „Einfügen“ liegt im Overlay und darf nicht als neues Ziel gelten.
+    private var rememberedInsert: RememberedInsert?
+    /// Plain text of the clipboard captured for this paste session.
+    private var pendingClipboardText: String?
+    /// Previous clipboard text when a paste did not land in a field. The caller keeps it in history.
+    var onDisplacedClipboard: ((String) -> Void)?
 
     func selectedText() -> String? {
         guard let element = focusedElement() else { return nil }
@@ -52,38 +57,84 @@ final class TextInserter {
         return isEditable(element)
     }
 
+    func hasInsertableFocus() -> Bool {
+        guard Permissions.accessibilityGranted(), let element = focusedElement() else { return false }
+        return isInsertable(element)
+    }
+
     init() {
         // Electron/Chromium apps can stall AX queries for seconds (default timeout 6s).
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25)
+    }
+
+    /// Merkt sich Fokus und Markierung, solange noch die Ziel-App aktiv ist.
+    func rememberInsertTarget() {
+        guard Permissions.accessibilityGranted(), let element = focusedElement() else {
+            rememberedInsert = nil
+            return
+        }
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        guard pid != 0, pid != ProcessInfo.processInfo.processIdentifier else {
+            rememberedInsert = nil
+            return
+        }
+        rememberedInsert = RememberedInsert(
+            element: element,
+            range: selectedRange(of: element),
+            pid: pid
+        )
+    }
+
+    /// Ersetzt die gemerkte Markierung oder fügt am gemerkten Cursor ein.
+    func insertAtRememberedCursor(
+        _ text: String,
+        fallbackBundleID: String?,
+        completion: @escaping (InsertResult) -> Void
+    ) {
+        if replaceRememberedSelection(with: text) {
+            Timing.mark("insert: accessibility replace")
+            completion(InsertResult(pasted: true, keptOnClipboard: false))
+            return
+        }
+        activateRememberedApp(fallbackBundleID: fallbackBundleID)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            guard let self else { return }
+            self.focusRememberedField()
+            if self.replaceRememberedSelection(with: text) {
+                Timing.mark("insert: accessibility replace after focus")
+                completion(InsertResult(pasted: true, keptOnClipboard: false))
+                return
+            }
+            completion(self.insert(text))
+        }
     }
 
     @discardableResult
     func insert(_ text: String) -> InsertResult {
         Timing.mark("insert: start")
         restoreWork?.cancel()
-        let saved = pendingRestore ?? snapshot()
-        Timing.mark("insert: clipboard saved (\(saved.count) items)")
+        let captured = captureClipboard()
+        Timing.mark("insert: clipboard saved (\(captured.items.types.count) types)")
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        // Paste first; the AX checks below only decide about clipboard restore / fallback.
         let trusted = Permissions.accessibilityGranted()
-        if trusted {
-            post(key: 9, flags: .maskCommand)
-            Timing.mark("insert: ⌘V posted")
+        if !trusted {
+            // Without accessibility ⌘V cannot be posted. Text stays copied for manual paste.
+            dropPendingClipboard()
+            keepDisplaced(captured.text, replacedBy: text)
+            return InsertResult(pasted: false, keptOnClipboard: true)
         }
-        let editable = trusted && hasEditableFocus()
+
+        post(key: 9, flags: .maskCommand)
+        Timing.mark("insert: ⌘V posted")
+        pendingClipboardText = captured.text
+        scheduleRestore(captured.items, after: text)
+        let editable = hasInsertableFocus()
         Timing.mark("insert: focus checked (editable=\(editable))")
-
-        if editable {
-            scheduleRestore(saved)
-            return InsertResult(pasted: true, keptOnClipboard: false)
-        }
-
-        // Fallback: Text bleibt kopiert – ⌘V oder ⌘⇧V (Formatierung anpassen).
-        pendingRestore = nil
-        return InsertResult(pasted: false, keptOnClipboard: true)
+        return InsertResult(pasted: true, keptOnClipboard: false)
     }
 
     /// Replaces the just-inserted raw text with `text`, but only if the characters right before the
@@ -109,12 +160,13 @@ final class TextInserter {
         }
 
         restoreWork?.cancel()
-        let saved = pendingRestore ?? snapshot()
+        let captured = captureClipboard()
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         post(key: 9, flags: .maskCommand)
-        scheduleRestore(saved)
+        pendingClipboardText = captured.text
+        scheduleRestore(captured.items, after: text)
         return true
     }
 
@@ -175,14 +227,34 @@ final class TextInserter {
         return nil
     }
 
-    private func scheduleRestore(_ saved: [[NSPasteboard.PasteboardType: Data]]) {
-        pendingRestore = saved
+    private func scheduleRestore(_ saved: ClipboardSnapshot, after text: String) {
         let work = DispatchWorkItem { [weak self] in
-            self?.restore(saved)
-            self?.pendingRestore = nil
+            self?.restoreBoard(saved)
+            self?.sessionSnapshot = nil
+            self?.pendingClipboardText = nil
+            Timing.mark("insert: clipboard restored")
         }
         restoreWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: work)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.waitUntilVisible(text, timeout: 1.15)
+            Thread.sleep(forTimeInterval: 0.08)
+            DispatchQueue.main.async {
+                guard self?.restoreWork === work else { return }
+                work.perform()
+            }
+        }
+    }
+
+    private func waitUntilVisible(_ raw: String, timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if Permissions.accessibilityGranted(),
+               let element = focusedElement(),
+               rangeOfJustInserted(raw, in: element) != nil {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.04)
+        }
     }
 
     /// Range of `raw` ending exactly at the caret, in UTF-16 units as AX expects.
@@ -232,7 +304,9 @@ final class TextInserter {
 
     func copyToClipboard(_ text: String) {
         restoreWork?.cancel()
-        pendingRestore = nil
+        let displaced = pendingClipboardText ?? sessionSnapshot?.text
+        dropPendingClipboard()
+        keepDisplaced(displaced, replacedBy: text)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -298,7 +372,7 @@ final class TextInserter {
     private func copySelectionProbe() -> String? {
         guard !Task.isCancelled else { return nil }
         restoreWork?.cancel()
-        let saved = pendingRestore ?? snapshot()
+        let snap = snapshotBoard()
         let board = NSPasteboard.general
         let beforeCount = board.changeCount
         post(key: 8, flags: .maskCommand)
@@ -311,8 +385,7 @@ final class TextInserter {
                 break
             }
         }
-        restore(saved)
-        pendingRestore = nil
+        restoreBoard(snap)
         return accepted(copied)
     }
 
@@ -410,31 +483,142 @@ final class TextInserter {
         return false
     }
 
-    private func snapshot() -> [[NSPasteboard.PasteboardType: Data]] {
-        guard let items = NSPasteboard.general.pasteboardItems else { return [] }
-        return items.map { item in
-            var stored: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    stored[type] = data
-                }
-            }
-            return stored
+    private func isInsertable(_ element: AXUIElement) -> Bool {
+        var editableValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, "AXEditable" as CFString, &editableValue) == .success,
+           let editable = editableValue as? Bool {
+            return editable
         }
+        var settable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
+           settable.boolValue {
+            return true
+        }
+        if AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success,
+           settable.boolValue {
+            return true
+        }
+        var roleValue: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
+        let role = roleValue as? String ?? ""
+        let editableRoles: Set<String> = [
+            "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXTextEditor"
+        ]
+        return editableRoles.contains(role)
     }
 
-    private func restore(_ snapshot: [[NSPasteboard.PasteboardType: Data]]) {
+    private struct ClipboardSnapshot {
+        var types: [NSPasteboard.PasteboardType]
+        var data: [NSPasteboard.PasteboardType: Data]
+        var text: String?
+        var isEmpty: Bool { data.isEmpty }
+    }
+
+    private var sessionSnapshot: ClipboardSnapshot?
+
+    private func captureClipboard() -> (items: ClipboardSnapshot, text: String?) {
+        if let sessionSnapshot {
+            return (sessionSnapshot, pendingClipboardText ?? sessionSnapshot.text)
+        }
+        let snap = snapshotBoard()
+        sessionSnapshot = snap
+        return (snap, snap.text)
+    }
+
+    private func currentPlainText() -> String? {
+        let board = NSPasteboard.general
+        if let text = board.string(forType: .string) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return text }
+        }
+        if let data = board.data(forType: .rtf),
+           let rich = NSAttributedString(rtf: data, documentAttributes: nil) {
+            let text = rich.string
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return text }
+        }
+        return nil
+    }
+
+    /// Keeps the previous clipboard text when this paste stays on the clipboard instead of a field.
+    private func keepDisplaced(_ previous: String?, replacedBy inserted: String) {
+        guard let previous else { return }
+        let trimmed = previous.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 200_000 else { return }
+        guard trimmed != inserted.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        onDisplacedClipboard?(previous)
+    }
+
+    private func dropPendingClipboard() {
+        pendingClipboardText = nil
+        sessionSnapshot = nil
+    }
+
+    private func snapshotBoard() -> ClipboardSnapshot {
+        let board = NSPasteboard.general
+        var data: [NSPasteboard.PasteboardType: Data] = [:]
+        var types: [NSPasteboard.PasteboardType] = []
+        for type in board.types ?? [] {
+            guard let payload = board.data(forType: type), !payload.isEmpty else { continue }
+            types.append(type)
+            data[type] = payload
+        }
+        return ClipboardSnapshot(types: types, data: data, text: currentPlainText())
+    }
+
+    private func restoreBoard(_ snapshot: ClipboardSnapshot) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard !snapshot.isEmpty else { return }
-        let items: [NSPasteboardItem] = snapshot.map { stored in
-            let item = NSPasteboardItem()
-            for (type, data) in stored {
-                item.setData(data, forType: type)
+        pasteboard.declareTypes(snapshot.types, owner: nil)
+        for type in snapshot.types {
+            if let payload = snapshot.data[type] {
+                pasteboard.setData(payload, forType: type)
             }
-            return item
         }
-        pasteboard.writeObjects(items)
+    }
+
+    private struct RememberedInsert {
+        var element: AXUIElement
+        var range: CFRange?
+        var pid: pid_t
+    }
+
+    private func activateRememberedApp(fallbackBundleID: String?) {
+        if let pid = rememberedInsert?.pid,
+           let app = NSRunningApplication(processIdentifier: pid),
+           app.bundleIdentifier != Bundle.main.bundleIdentifier {
+            app.activate(from: .current, options: [])
+            return
+        }
+        guard let fallbackBundleID,
+              let app = NSRunningApplication.runningApplications(withBundleIdentifier: fallbackBundleID).first
+        else { return }
+        app.activate(from: .current, options: [])
+    }
+
+    private func focusRememberedField() {
+        guard let rememberedInsert else { return }
+        AXUIElementSetAttributeValue(rememberedInsert.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        guard var range = rememberedInsert.range, range.location >= 0,
+              let axRange = AXValueCreate(.cfRange, &range) else { return }
+        AXUIElementSetAttributeValue(rememberedInsert.element, kAXSelectedTextRangeAttribute as CFString, axRange)
+    }
+
+    private func replaceRememberedSelection(with text: String) -> Bool {
+        guard let rememberedInsert else { return false }
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(
+            rememberedInsert.element,
+            kAXSelectedTextAttribute as CFString,
+            &settable
+        ) == .success, settable.boolValue else { return false }
+        focusRememberedField()
+        return AXUIElementSetAttributeValue(
+            rememberedInsert.element,
+            kAXSelectedTextAttribute as CFString,
+            text as CFString
+        ) == .success
     }
 
     private func post(key: CGKeyCode, flags: CGEventFlags) {

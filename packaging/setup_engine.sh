@@ -31,7 +31,7 @@ if [[ ! -x "$SUPPORT/.venv/bin/python" ]]; then
   uv venv --python 3.12 "$SUPPORT/.venv"
 fi
 
-echo "Installiere Whisper und MLX…"
+echo "Installiere Spracherkennung und MLX…"
 uv pip install --python "$SUPPORT/.venv/bin/python" --reinstall-package flow-engine "$SRC_COPY"
 
 echo "$VERSION" > "$SUPPORT/engine.version"

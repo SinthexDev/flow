@@ -114,9 +114,11 @@ security import "$P12" \
   -T /usr/bin/codesign \
   -T /usr/bin/security >/dev/null 2>&1 || true
 
+# Use the PKCS#12 password, not an empty string — otherwise codesign keeps asking
+# for the login keychain password on every build when the keychain is locked.
 security set-key-partition-list \
   -S apple-tool:,apple:,codesign: \
-  -s -k "" \
+  -s -k "$PASS" \
   -D "$NAME" \
   "$KEYCHAIN" >/dev/null 2>&1 || true
 

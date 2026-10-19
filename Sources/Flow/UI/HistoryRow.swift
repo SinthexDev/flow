@@ -31,29 +31,42 @@ struct HistoryRow: View {
                 }
                 .buttonStyle(IconButtonStyle())
                 .opacity(hovering || copied ? 1 : 0)
+                .allowsHitTesting(hovering || copied)
                 .help(L10n.s("history.copyHelp"))
+                if !expanded {
+                    Button(role: .destructive, action: remove) {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .opacity(hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
+                    .help(L10n.s("history.remove"))
+                }
             }
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(L10n.s("history.spoken"))
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Text(entry.raw)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                    if !entry.keepsClipboard {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.s("history.spoken"))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Text(entry.raw)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.04)))
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.04)))
                     HStack(spacing: 8) {
                         Button(L10n.s("history.copy"), action: copy).buttonStyle(SoftButtonStyle())
-                        Button(L10n.s("history.copyRaw")) { state.copy(entry.raw) }.buttonStyle(SoftButtonStyle())
+                        if !entry.keepsClipboard {
+                            Button(L10n.s("history.copyRaw")) { state.copy(entry.raw) }.buttonStyle(SoftButtonStyle())
+                        }
                         Spacer(minLength: 8)
-                        Button(role: .destructive) {
-                            withAnimation(.snappy) { state.deleteHistory(entry.id) }
-                        } label: {
+                        Button(role: .destructive, action: remove) {
                             HStack(spacing: 6) {
                                 Image(systemName: "trash")
                                 Text(L10n.s("history.remove"))
@@ -82,19 +95,30 @@ struct HistoryRow: View {
                 withAnimation(.snappy(duration: 0.25)) { expanded.toggle() }
             }
         }
+        .contextMenu {
+            Button(L10n.s("history.copy"), action: copy)
+            Button(L10n.s("history.remove"), role: .destructive, action: remove)
+        }
     }
 
     private var meta: some View {
         HStack(spacing: 5) {
             Text(mode == .full ? Fmt.time(entry.date) : Fmt.relative(entry.date))
-            if let app = entry.app, !app.isEmpty {
+            if entry.keepsClipboard {
                 Text("·")
-                Text(app)
-            }
-            if entry.wasCommand == true {
-                Text("·")
-                Image(systemName: "wand.and.stars")
-                Text(L10n.s("history.rewritten"))
+                Image(systemName: "doc.on.clipboard")
+                Text(L10n.s("history.clipboard"))
+                    .lineLimit(1)
+            } else {
+                if let app = entry.app, !app.isEmpty {
+                    Text("·")
+                    Text(app)
+                }
+                if entry.wasCommand == true {
+                    Text("·")
+                    Image(systemName: "wand.and.stars")
+                    Text(L10n.s("history.rewritten"))
+                }
             }
             if mode != .compact {
                 Text("·")
@@ -111,5 +135,9 @@ struct HistoryRow: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             withAnimation { copied = false }
         }
+    }
+
+    private func remove() {
+        withAnimation(.snappy) { state.deleteHistory(entry.id) }
     }
 }

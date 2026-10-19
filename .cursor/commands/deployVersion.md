@@ -100,7 +100,14 @@ Entscheiden, nicht pauschal neu aufnehmen. Ein Bild wird ersetzt, wenn diese Ver
 
 Nur die betroffenen Paare neu aufnehmen. Pixelmaße der bestehenden Datei beibehalten (`sips -g pixelWidth -g pixelHeight`). Ändert sich die Größe, `width` und `height` in der HTML-Seite mitziehen, die das Bild zeigt (`rg -l <datei>.png ../flow-site/*.html`). Beim Einstellungsbild auch den Ausschnitt `.crop-frame` / `.crop-settings` in `styles.css` prüfen.
 
-Aufnahme, wenn sie nötig ist: `./scripts/build_app.sh`, laufendes Sinthex Flow beenden, `open "dist/Sinthex Flow.app"`, Fenster mit `screencapture -l <fensterId> -o` ohne Schatten aufnehmen, App beenden. Dieselbe Aufnahme in beide Dateien des Paares legen. Die Fenster-ID der Sinthex-Flow-Fenster über Quartz `CGWindowListCopyWindowInfo` holen.
+Aufnahme, wenn sie nötig ist: `./scripts/build_app.sh`, dann offscreen mit Snapshot — die laufende Nutzer-App nicht beenden:
+
+```bash
+SNAP=$(mktemp -d /tmp/flow-snap-XXXX)
+"dist/Sinthex Flow.app/Contents/MacOS/Sinthex Flow" --snapshot "$SNAP"
+```
+
+Pixelmaße der bestehenden Datei beibehalten (`sips -g pixelWidth -g pixelHeight`); bei Retina oft 2× der Rendergröße. Dieselbe Aufnahme in beide Dateien des Paares legen. `pkill` / Quit der installierten App ist untersagt — Updates holt der Nutzer online.
 
 ## 6. Paket bauen und online stellen
 

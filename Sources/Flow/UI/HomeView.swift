@@ -26,6 +26,7 @@ struct HomeView: View {
     }
 
     private var homeSubtitle: String {
+        if state.config.usesFallbackCorrection { return L10n.s("home.subtitle.fallback") }
         if state.config.usesCustomCorrectionAPI { return L10n.s("home.subtitle.custom") }
         return state.config.correctsWithOpenAI ? L10n.s("home.subtitle.on") : L10n.s("home.subtitle.off")
     }

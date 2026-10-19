@@ -24,21 +24,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var permissionTimer: Timer?
     private var resetWork: DispatchWorkItem?
     private var silenceWork: DispatchWorkItem?
+    private var warmupTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     private var correctionLookup: Task<Void, Never>?
     private var correctionLookupKey: String?
     private var correctionGeneration = 0
     private var dictationApp: FrontApp?
     private var frontObserver: NSObjectProtocol?
+    /// Rohdaten für die Auswahl Befehl vs. Umformulierung.
+    private var pendingChoiceMeta: (raw: String, duration: TimeInterval, app: String?)?
+
+    private func clearDictationPreview() {
+        state.dictationPreview = nil
+    }
+
+    private func presentDictationPreview(
+        text: String,
+        status: DictationPreviewStatus,
+        wasCommand: Bool = false
+    ) {
+        guard state.config.showDictationPreview else {
+            clearDictationPreview()
+            return
+        }
+        state.dictationPreview = DictationPreview(text: text, status: status, wasCommand: wasCommand)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        inserter.onDisplacedClipboard = { [weak self] text in
+            self?.state.rememberClipboard(text)
+        }
         OutputSilence.recover()
         overlay = OverlayController(state: state)
         installEditMenu()
         setupStatusItem()
         wireState()
+        startWarmupTimer()
 
         hotkeys.hotkey = state.config.resolvedHotkey
+        updateLaunch(state.config.launchAtLogin)
         hotkeys.onPress = { [weak self] in self?.dismissTransient() }
         hotkeys.onHoldStart = { [weak self] in self?.beginListening(handsFree: false) }
         hotkeys.onHoldEnd = { [weak self] in
@@ -91,10 +115,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         if !SnapshotMode.isActive {
+            // Migrate signature-bound Keychain items once; later updates stay silent.
+            DispatchQueue.global(qos: .utility).async {
+                _ = OpenAIKeyStore.load()
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
                 self?.state.checkForUpdate()
             }
-            InstallPing.sendIfNeeded(enabled: state.config.countInstall)
         }
     }
 
@@ -131,7 +158,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hotkeys.stop()
         ticker?.invalidate()
         permissionTimer?.invalidate()
+        warmupTimer?.invalidate()
+        warmupTimer = nil
         engine.shutdown()
+    }
+
+    /// Keeps Whisper weights in fast memory during idle gaps shorter than a cold reload.
+    private func startWarmupTimer() {
+        warmupTimer?.invalidate()
+        warmupTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { [weak self] _ in
+            guard let self, self.engine.ready, self.state.phase == .idle else { return }
+            self.engine.prewarm(port: self.state.config.port)
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -157,13 +195,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func wireState() {
         state.toggleRecording = { [weak self] in self?.toggleHandsFree() }
         state.openMain = { [weak self] section in self?.showMain(section) }
+        state.openNotes = { [weak self] in self?.openNotesFromMenu() }
         state.reloadEngine = { [weak self] in self?.engine.restart() }
         state.finishOnboarding = { [weak self] in
-            self?.state.config.onboarded = true
+            self?.state.withoutSettingToast { self?.state.config.onboarded = true }
             self?.onboardingWindow?.close()
         }
         state.translateSelection = { [weak self] lang in self?.translateSelection(to: lang) }
-        state.lookupCorrectionModel = { [weak self] key in self?.refreshCorrectionModel(key) }
+        state.applyOverlayChoice = { [weak self] choice in self?.applyOverlayChoice(choice) }
+        state.lookupCorrectionModel = { [weak self] key, base in self?.refreshCorrectionModel(key, baseURL: base) }
         state.configChanged = { [weak self] old, new in self?.configChanged(from: old, to: new) }
         state.$phase
             .removeDuplicates()
@@ -179,20 +219,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .store(in: &cancellables)
     }
 
-    private func refreshCorrectionModel(_ key: String) {
+    private func refreshCorrectionModel(_ key: String, baseURL: String? = nil) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = state.config.resolvedCorrectionBaseURL
-        let custom = state.config.usesCustomCorrectionAPI
-        guard state.config.correctsWithOpenAI, custom || !trimmed.isEmpty else {
+        let base = baseURL ?? self.state.config.resolvedCorrectionBaseURL
+        let host = URL(string: base)?.host?.lowercased() ?? ""
+        let needsKey = ["api.openai.com", "api.anthropic.com", "api.cursor.com"].contains(host)
+        guard state.config.correctsWithOpenAI, !needsKey || !trimmed.isEmpty else {
             correctionGeneration += 1
             correctionLookup?.cancel()
             correctionLookupKey = nil
-            state.correctionModel = ""
-            state.correctionModels = []
+            state.correctionCatalogs[base] = CorrectionCatalog()
+            state.correctionLookupErrors[base] = nil
+            if state.config.resolvedCorrectionBaseURL == base {
+                state.correctionModel = ""
+                state.correctionModels = []
+            }
             return
         }
         let token = "\(base)\n\(trimmed)"
-        if correctionLookupKey == token, !state.correctionModel.isEmpty { return }
+        if correctionLookupKey == token, state.correctionCatalogs[base]?.recommended.isEmpty == false { return }
         correctionLookupKey = token
         correctionGeneration += 1
         let generation = correctionGeneration
@@ -204,13 +249,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 let catalog = try await self.engine.correctionModel(apiKey: trimmed, baseURL: base, port: port)
                 await MainActor.run {
                     guard self.correctionGeneration == generation else { return }
-                    self.state.correctionModel = catalog.model
-                    self.state.correctionModels = catalog.models ?? []
+                    let next = CorrectionCatalog(recommended: catalog.model, models: catalog.models ?? [])
+                    self.state.correctionCatalogs[base] = next
+                    self.state.correctionLookupErrors[base] = nil
+                    self.state.correctionModel = next.recommended
+                    self.state.correctionModels = next.models
                 }
             } catch {
                 await MainActor.run {
                     guard self.correctionGeneration == generation else { return }
                     self.correctionLookupKey = nil
+                    self.state.correctionCatalogs[base] = CorrectionCatalog()
+                    self.state.correctionLookupErrors[base] = error.localizedDescription
                     self.state.correctionModel = ""
                     self.state.correctionModels = []
                 }
@@ -244,7 +294,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if old.launchAtLogin != new.launchAtLogin {
             updateLaunch(new.launchAtLogin)
         }
-        if old.modelPath != new.modelPath || old.whisperModel != new.whisperModel || old.port != new.port {
+        if old.modelPath != new.modelPath
+            || old.whisperModel != new.whisperModel
+            || old.asrEngine != new.asrEngine
+            || old.asrQuality != new.asrQuality
+            || old.port != new.port {
             engine.restart()
         }
         if old.othersAudio != new.othersAudio {
@@ -255,9 +309,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if old.learnEdits != new.learnEdits, !new.learnEdits {
             dictionaryLearner.stop()
-        }
-        if old.countInstall != new.countInstall, new.countInstall {
-            InstallPing.sendIfNeeded(enabled: true)
         }
     }
 
@@ -289,6 +340,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// The confirmation banner swallows the next hold if it stays up. Drop it as soon as Fn goes down.
     private func dismissTransient() {
+        if state.dictationPreview != nil {
+            clearDictationPreview()
+        }
         switch state.phase {
         case .done, .notice, .failed:
             show(.idle)
@@ -299,6 +353,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func show(_ phase: Phase, resetAfter delay: TimeInterval? = nil) {
         resetWork?.cancel()
+        switch phase {
+        case .listening, .transcribing, .failed, .notice:
+            clearDictationPreview()
+        case .polishing(let raw):
+            if state.config.showDictationPreview, !state.rewriting {
+                presentDictationPreview(text: raw, status: .working)
+            } else if state.rewriting {
+                clearDictationPreview()
+            }
+        default:
+            break
+        }
         state.phase = phase
         guard let delay else { return }
         let work = DispatchWorkItem { [weak self] in self?.state.phase = .idle }
@@ -336,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         dictationGeneration += 1
         dictationApp = FrontApp.current()
         if let dictationApp { state.rememberApp(dictationApp) }
+        inserter.rememberInsertTarget()
         engine.prewarm(port: state.config.port)
         do {
             try recorder.start()
@@ -346,6 +413,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         startSelectionCapture()
         dictionaryLearner.stop()
         popover.performClose(nil)
+        state.overlayResult = nil
+        state.notePreview = nil
+        clearDictationPreview()
+        pendingChoiceMeta = nil
         state.handsFree = handsFree
         state.resetLevels()
         state.elapsed = 0
@@ -362,7 +433,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func startSelectionCapture() {
         selectionTask?.cancel()
-        guard state.config.commandMode, engine.polishAvailable else {
+        // Markierung auch ohne bereite Korrektur lesen, damit ein Befehl nicht als Diktat darüberklebt.
+        guard state.config.commandMode else {
             selectionTask = nil
             return
         }
@@ -417,16 +489,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         let modelAvailable = engine.polishAvailable
-        let commandMode = state.config.commandMode && modelAvailable
+        let wantsSelection = state.config.commandMode
         let capture = selectionTask
         selectionTask = nil
-        if !commandMode { capture?.cancel() }
+        if !wantsSelection { capture?.cancel() }
         let front = FrontApp.current() ?? dictationApp
         if let front { state.rememberApp(front) }
         let appName = front?.name ?? inserter.frontmostAppName()
-        var snapshot = state.config
-        if let front { snapshot.style = state.effectiveStyle(for: front) }
-        if !modelAvailable { snapshot.autoCorrect = false }
+        var config = state.config
+        if let front { config.style = state.effectiveStyle(for: front) }
+        if !modelAvailable { config.autoCorrect = false }
+        let snapshot = config
         show(.transcribing)
         let generation = dictationGeneration
 
@@ -434,7 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self else { return }
             let selectionLogged = Task { () -> String? in
                 let value: String?
-                if commandMode, let capture {
+                if wantsSelection, let capture {
                     value = await capture.value
                 } else {
                     value = nil
@@ -454,6 +527,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     return
                 }
 
+                if let selection,
+                   !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   let noteKind = NoteSaveCommand.kind(trimmed) {
+                    let marked = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+                    switch noteKind {
+                    case .verbatim:
+                        _ = await self.state.saveCapturedText(marked)
+                        Timing.mark("note command saved verbatim")
+                        await MainActor.run {
+                            guard generation == self.dictationGeneration else { return }
+                            self.finishNoteSave(
+                                body: marked,
+                                spoken: trimmed,
+                                duration: duration,
+                                app: appName
+                            )
+                        }
+                    case .answer:
+                        guard modelAvailable else {
+                            await MainActor.run {
+                                guard generation == self.dictationGeneration else { return }
+                                self.show(.notice(L10n.s("notice.commandNeedsKey")), resetAfter: 2.8)
+                            }
+                            return
+                        }
+                        await MainActor.run {
+                            guard generation == self.dictationGeneration else { return }
+                            self.state.rewriting = true
+                            self.show(.polishing(raw: trimmed))
+                        }
+                        Timing.mark("note command answer")
+                        let answer: String
+                        do {
+                            answer = try await self.engine.polish(
+                                raw: trimmed,
+                                selection: marked,
+                                config: snapshot,
+                                noteAnswer: true
+                            ).trimmingCharacters(in: .whitespacesAndNewlines)
+                        } catch {
+                            if Task.isCancelled || generation != self.dictationGeneration { return }
+                            let failure = error.localizedDescription
+                            await MainActor.run {
+                                guard generation == self.dictationGeneration else { return }
+                                self.state.rewriting = false
+                                self.show(.failed(failure), resetAfter: 3.2)
+                            }
+                            return
+                        }
+                        if Task.isCancelled || generation != self.dictationGeneration { return }
+                        guard !answer.isEmpty else {
+                            await MainActor.run {
+                                guard generation == self.dictationGeneration else { return }
+                                self.state.rewriting = false
+                                self.show(.failed(L10n.s("notice.commandFailed")), resetAfter: 3.2)
+                            }
+                            return
+                        }
+                        _ = await self.state.saveCapturedText(answer)
+                        Timing.mark("note command saved answer")
+                        await MainActor.run {
+                            guard generation == self.dictationGeneration else { return }
+                            self.finishNoteSave(
+                                body: answer,
+                                spoken: trimmed,
+                                duration: duration,
+                                app: appName
+                            )
+                        }
+                    }
+                    return
+                }
+
+                if let selection, !selection.isEmpty, !modelAvailable {
+                    await MainActor.run {
+                        guard generation == self.dictationGeneration else { return }
+                        self.show(.notice(L10n.s("notice.commandNeedsKey")), resetAfter: 2.8)
+                    }
+                    return
+                }
+
                 // Nur Whisper: direkt einfügen, kein Sprachmodell.
                 if !snapshot.autoCorrect && selection == nil {
                     await MainActor.run {
@@ -468,118 +622,250 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // Remote correction starts now, so the round trip overlaps the paste.
                 // A local model waits until the paste has landed, otherwise it occupies the GPU.
                 let remote = snapshot.polishProvider != "local"
-                let polishTask: Task<String, Error>? = remote
-                    ? Task { try await self.engine.polish(raw: trimmed, selection: selection, config: snapshot) }
-                    : nil
-                if polishTask != nil { Timing.mark("polish request sent") }
 
-                // Sofort einfügen – außer bei Bearbeitungsbefehl auf Markierung.
-                let earlyResult: InsertResult?
+                // Sofort einfügen – außer bei Bearbeitungsbefehl / Umformulierung auf Markierung.
                 if selection == nil {
-                    earlyResult = await MainActor.run { () -> InsertResult in
+                    let polishTask: Task<String, Error>? = remote
+                        ? Task { try await self.engine.polish(raw: trimmed, selection: nil, config: snapshot) }
+                        : nil
+                    if polishTask != nil { Timing.mark("polish request sent") }
+
+                    let earlyResult = await MainActor.run { () -> InsertResult in
                         Timing.mark("main thread reached")
                         self.show(.polishing(raw: trimmed))
                         let result = self.inserter.insert(trimmed)
                         self.inserter.logWhenLanded(trimmed)
                         return result
                     }
-                } else {
-                    earlyResult = nil
+
+                    guard !Task.isCancelled, generation == self.dictationGeneration else {
+                        polishTask?.cancel()
+                        return
+                    }
+
+                    let activePolish: Task<String, Error>
+                    if let polishTask {
+                        activePolish = polishTask
+                    } else {
+                        try? await Task.sleep(nanoseconds: 40_000_000)
+                        Timing.mark("polish request sent")
+                        activePolish = Task { try await self.engine.polish(raw: trimmed, selection: nil, config: snapshot) }
+                    }
+
+                    var polishedText = trimmed
+                    var polishError: String?
+                    do {
+                        let polished = try await activePolish.value
+                        let clean = polished.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !clean.isEmpty { polishedText = clean }
+                    } catch {
+                        if Task.isCancelled || generation != self.dictationGeneration { return }
+                        polishError = error.localizedDescription
+                    }
+                    if Task.isCancelled || generation != self.dictationGeneration { return }
+                    let final = polishedText
+                    let correctionError = polishError
+
                     await MainActor.run {
                         guard generation == self.dictationGeneration else { return }
-                        self.state.rewriting = true
-                        self.show(.polishing(raw: trimmed))
+                        var landed = final
+                        if final != trimmed, earlyResult.pasted,
+                           !self.inserter.replacePreviousInsert(raw: trimmed, with: final) {
+                            landed = trimmed
+                        } else if final != trimmed, !earlyResult.pasted {
+                            self.inserter.copyToClipboard(final)
+                        } else if final == trimmed, earlyResult.keptOnClipboard {
+                            self.inserter.copyToClipboard(final)
+                        }
+                        self.finishDeliver(
+                            text: final,
+                            raw: trimmed,
+                            duration: duration,
+                            app: appName,
+                            command: false,
+                            pasted: earlyResult.pasted,
+                            fieldText: earlyResult.pasted ? landed : nil
+                        )
+                        if let correctionError {
+                            self.show(.notice(correctionError), resetAfter: 3.4)
+                        }
                     }
-                }
-                guard !Task.isCancelled, generation == self.dictationGeneration else {
-                    polishTask?.cancel()
                     return
                 }
 
-                let activePolish: Task<String, Error>
-                if let polishTask {
-                    activePolish = polishTask
-                } else {
-                    if earlyResult != nil {
-                        try? await Task.sleep(nanoseconds: 40_000_000)
-                    }
-                    Timing.mark("polish request sent")
-                    activePolish = Task { try await self.engine.polish(raw: trimmed, selection: selection, config: snapshot) }
+                // Markierung: immer fragen, ob Befehl oder Umformulierung.
+                await MainActor.run {
+                    guard generation == self.dictationGeneration else { return }
+                    self.state.rewriting = true
+                    self.show(.polishing(raw: trimmed))
                 }
 
-                var polishedText = trimmed
+                Timing.mark("choice polish (command + reformulate)")
+                async let commandPolish = self.engine.polish(raw: trimmed, selection: selection, config: snapshot)
+                async let rewritePolish = self.engine.polish(raw: trimmed, selection: nil, config: snapshot)
+                var commandText = ""
+                var rewriteText = ""
                 var polishError: String?
                 do {
-                    let polished = try await activePolish.value
-                    let clean = polished.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !clean.isEmpty { polishedText = clean }
+                    commandText = try await commandPolish.trimmingCharacters(in: .whitespacesAndNewlines)
                 } catch {
                     if Task.isCancelled || generation != self.dictationGeneration { return }
                     polishError = error.localizedDescription
                 }
+                do {
+                    rewriteText = try await rewritePolish.trimmingCharacters(in: .whitespacesAndNewlines)
+                } catch {
+                    if Task.isCancelled || generation != self.dictationGeneration { return }
+                    if polishError == nil { polishError = error.localizedDescription }
+                }
                 if Task.isCancelled || generation != self.dictationGeneration { return }
-                let final = polishedText
-                let correctionError = polishError
+                if commandText.isEmpty, rewriteText.isEmpty {
+                    let failure = polishError
+                    await MainActor.run {
+                        guard generation == self.dictationGeneration else { return }
+                        self.state.rewriting = false
+                        self.show(.failed(failure ?? L10n.s("notice.commandFailed")), resetAfter: 3.2)
+                    }
+                    return
+                }
+                if commandText.isEmpty { commandText = trimmed }
+                if rewriteText.isEmpty { rewriteText = trimmed }
+                let commandChoice = commandText
+                let rewriteChoice = rewriteText
 
                 await MainActor.run {
                     guard generation == self.dictationGeneration else { return }
-                    if let early = earlyResult {
-                        var landed = final
-                        if final != trimmed, early.pasted,
-                           !self.inserter.replacePreviousInsert(raw: trimmed, with: final) {
-                            landed = trimmed
-                        } else if final != trimmed, !early.pasted {
-                            self.inserter.copyToClipboard(final)
-                        } else if final == trimmed, early.keptOnClipboard {
-                            self.inserter.copyToClipboard(final)
-                        }
-                        self.finishDeliver(
-                            text: final,
-                            raw: trimmed,
-                            duration: duration,
-                            app: appName,
-                            command: false,
-                            pasted: early.pasted,
-                            fieldText: early.pasted ? landed : nil
-                        )
-                    } else if correctionError != nil || final == trimmed {
-                        self.state.rewriting = false
-                        if let correctionError {
-                            self.show(.failed(correctionError), resetAfter: 3.2)
-                        } else {
-                            self.show(.notice(L10n.s("notice.commandFailed")), resetAfter: 2.4)
-                        }
-                    } else if Self.rewriteCollapsed(result: final, command: trimmed) {
-                        let result = self.inserter.insert(trimmed)
-                        self.finishDeliver(
-                            text: trimmed,
-                            raw: trimmed,
-                            duration: duration,
-                            app: appName,
-                            command: false,
-                            pasted: result.pasted,
-                            fieldText: result.pasted ? trimmed : nil
-                        )
-                    } else {
-                        let result = self.inserter.insert(final)
-                        self.finishDeliver(
-                            text: final,
-                            raw: trimmed,
-                            duration: duration,
-                            app: appName,
-                            command: true,
-                            pasted: result.pasted,
-                            fieldText: result.pasted ? final : nil
-                        )
-                    }
-                    if let correctionError, earlyResult != nil {
-                        self.show(.notice(correctionError), resetAfter: 3.4)
-                    }
+                    self.deliverSelectionOutcome(
+                        spoken: trimmed,
+                        selection: selection!,
+                        intent: .ambiguous,
+                        commandText: commandChoice,
+                        rewriteText: rewriteChoice,
+                        duration: duration,
+                        app: appName
+                    )
                 }
             } catch {
                 if Task.isCancelled { return }
                 await MainActor.run { self.show(.failed(error.localizedDescription), resetAfter: 3) }
             }
+        }
+    }
+
+    private func finishNoteSave(
+        body: String,
+        spoken: String,
+        duration: TimeInterval,
+        app: String?
+    ) {
+        state.rewriting = false
+        state.addHistory(HistoryEntry(
+            id: UUID(),
+            date: Date(),
+            raw: spoken,
+            text: body,
+            duration: duration,
+            app: app,
+            wasCommand: true
+        ))
+        show(.idle)
+    }
+
+    private func deliverSelectionOutcome(
+        spoken: String,
+        selection: String,
+        intent: SelectionIntent,
+        commandText: String?,
+        rewriteText: String?,
+        duration: TimeInterval,
+        app: String?
+    ) {
+        _ = selection
+        switch intent {
+        case .ambiguous:
+            let command = commandText ?? spoken
+            let rewrite = rewriteText ?? spoken
+            pendingChoiceMeta = (spoken, duration, app)
+            state.rewriting = false
+            state.overlayResult = OverlayResult(
+                command: spoken,
+                text: command,
+                choices: [
+                    OverlayResultChoice(
+                        kind: .command,
+                        title: L10n.s("overlay.choice.command"),
+                        text: command
+                    ),
+                    OverlayResultChoice(
+                        kind: .reformulate,
+                        title: L10n.s("overlay.choice.reformulate"),
+                        text: rewrite
+                    ),
+                ]
+            )
+            state.widgetHovered = true
+            state.widgetTranslateOpen = false
+            show(.idle)
+
+        case .command:
+            let text = commandText ?? spoken
+            applySelectionText(text, spoken: spoken, duration: duration, app: app, asCommand: true)
+
+        case .reformulate:
+            let text = rewriteText ?? spoken
+            applySelectionText(text, spoken: spoken, duration: duration, app: app, asCommand: false)
+        }
+    }
+
+    private func applySelectionText(
+        _ text: String,
+        spoken: String,
+        duration: TimeInterval,
+        app: String?,
+        asCommand: Bool
+    ) {
+        if !inserter.hasInsertableFocus() {
+            presentOverlayResult(
+                command: spoken,
+                text: text,
+                raw: spoken,
+                duration: duration,
+                app: app,
+                wasCommand: asCommand
+            )
+            return
+        }
+        let result = inserter.insert(text)
+        finishDeliver(
+            text: text,
+            raw: spoken,
+            duration: duration,
+            app: app,
+            command: asCommand,
+            pasted: result.pasted,
+            fieldText: result.pasted ? text : nil
+        )
+    }
+
+    private func applyOverlayChoice(_ choice: OverlayResultChoice) {
+        let meta = pendingChoiceMeta
+        pendingChoiceMeta = nil
+        state.overlayResult = nil
+        overlay?.releaseKey()
+        let spoken = meta?.raw ?? choice.text
+        let duration = meta?.duration ?? 0
+        let app = meta?.app
+        inserter.insertAtRememberedCursor(choice.text, fallbackBundleID: dictationApp?.bundleID) { [weak self] result in
+            guard let self else { return }
+            self.finishDeliver(
+                text: choice.text,
+                raw: spoken,
+                duration: duration,
+                app: app,
+                command: choice.kind == .command,
+                pasted: result.pasted,
+                fieldText: result.pasted ? choice.text : nil
+            )
         }
     }
 
@@ -624,6 +910,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     return
                 }
                 await MainActor.run {
+                    if !self.inserter.hasInsertableFocus() {
+                        self.presentOverlayResult(
+                            command: L10n.s("overlay.translate"),
+                            text: text,
+                            raw: selection,
+                            duration: nil,
+                            app: self.inserter.frontmostAppName()
+                        )
+                        return
+                    }
                     let result = self.inserter.insert(text)
                     self.state.addHistory(HistoryEntry(
                         id: UUID(),
@@ -634,10 +930,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         app: self.inserter.frontmostAppName(),
                         wasCommand: true
                     ))
-                    self.show(
-                        .done(text: text, pasted: result.pasted),
-                        resetAfter: result.pasted ? 0.85 : 2.2
-                    )
+                    if self.state.config.showDictationPreview {
+                        if result.pasted {
+                            self.clearDictationPreview()
+                        } else {
+                            self.presentDictationPreview(
+                                text: text,
+                                status: .copied,
+                                wasCommand: true
+                            )
+                        }
+                        self.show(.idle)
+                    } else {
+                        self.show(
+                            .done(text: text, pasted: result.pasted),
+                            resetAfter: result.pasted ? 0.85 : 2.2
+                        )
+                    }
                 }
             } catch {
                 if Task.isCancelled { return }
@@ -646,13 +955,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    /// A long instruction that comes back as a word already inside that instruction
-    /// is a failed rewrite. The spoken sentence is what the user meant to insert.
-    private static func rewriteCollapsed(result: String, command: String) -> Bool {
-        let resultWords = result.split { $0.isWhitespace }
-        let commandWords = command.split { $0.isWhitespace }
-        guard resultWords.count <= 2, commandWords.count >= 10 else { return false }
-        return command.range(of: result, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    private func presentOverlayResult(
+        command: String,
+        text: String,
+        raw: String,
+        duration: TimeInterval?,
+        app: String?,
+        wasCommand: Bool = true
+    ) {
+        state.rewriting = false
+        clearDictationPreview()
+        state.overlayResult = OverlayResult(command: command, text: text)
+        state.widgetHovered = true
+        state.widgetTranslateOpen = false
+        state.addHistory(HistoryEntry(
+            id: UUID(),
+            date: Date(),
+            raw: raw,
+            text: text,
+            duration: duration,
+            app: app,
+            wasCommand: wasCommand
+        ))
+        show(.idle)
     }
 
     private func finishDeliver(
@@ -674,7 +999,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             app: app,
             wasCommand: command
         ))
-        show(.done(text: text, pasted: pasted), resetAfter: pasted ? 0.85 : 2.2)
+        if state.config.showDictationPreview {
+            if pasted {
+                // Insert succeeded — drop the preview without morphing to a countdown bar.
+                clearDictationPreview()
+            } else {
+                presentDictationPreview(
+                    text: text,
+                    status: .copied,
+                    wasCommand: command
+                )
+            }
+            show(.idle)
+        } else {
+            show(.done(text: text, pasted: pasted), resetAfter: pasted ? 0.85 : 2.2)
+        }
         guard let fieldText, state.config.learnEdits else { return }
         dictionaryLearner.watch(inserted: fieldText) { [weak self] items in
             self?.applyLearned(items)
@@ -694,7 +1033,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             added.append(item)
         }
         guard !added.isEmpty else { return }
-        state.config.dictionary = DictionaryItem.serialize(items)
+        state.withoutSettingToast {
+            state.config.dictionary = DictionaryItem.serialize(items)
+        }
         let summary = added.prefix(3).map { item in
             item.heardAs.isEmpty ? item.term : "\(item.heardAs) → \(item.term)"
         }.joined(separator: ", ")
@@ -728,6 +1069,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
+            // Fresh check when the menu opens; show an offer, do not install yet.
+            state.checkForUpdate(autoInstall: false)
+        }
+    }
+
+    private func openNotesFromMenu() {
+        popover.performClose(nil)
+        guard let folder = AppleNotesFolder.decode(state.config.noteDestination) else {
+            showMain(.notes)
+            return
+        }
+        let noteID = AppleNotes.rememberedID()
+        Task {
+            do {
+                try await AppleNotes.reveal(account: folder.account, folder: folder.name, noteID: noteID)
+            } catch {
+                NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Notes.app"))
+            }
         }
     }
 
@@ -786,7 +1145,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         if window === onboardingWindow {
-            if !state.config.onboarded { state.config.onboarded = true }
+            if !state.config.onboarded {
+                state.withoutSettingToast { state.config.onboarded = true }
+            }
             onboardingWindow = nil
         }
         DispatchQueue.main.async { [weak self] in

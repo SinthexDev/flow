@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
 "NSMicrophoneUsageDescription" = "Sinthex Flow uporablja mikrofon za prepoznavo nareka lokalno na tem Macu.";
-"NSAppleEventsUsageDescription" = "Sinthex Flow vstavi narekovano besedilo v aktivno aplikacijo.";
+"NSAppleEventsUsageDescription" = "Sinthex Flow vstavi narekovano besedilo v dejavno aplikacijo in lahko shranjuje zapiske v aplikacijo Zapiski.";

@@ -27,6 +27,13 @@ struct CorrectionModelRequest: Encodable {
     var baseURL: String
 }
 
+struct PolishEndpointBody: Encodable {
+    var model: String
+    var apiKey: String?
+    var baseURL: String
+    var kind: String
+}
+
 struct PolishBody: Encodable {
     var raw: String
     var selection: String?
@@ -38,6 +45,8 @@ struct PolishBody: Encodable {
     var apiKey: String?
     var openAIModel: String?
     var baseURL: String?
+    var endpoints: [PolishEndpointBody]
+    var noteAnswer: Bool = false
 }
 
 enum EngineError: LocalizedError {
@@ -134,12 +143,28 @@ final class SpeechEngine {
         return try JSONDecoder().decode(TextBody.self, from: data).text
     }
 
-    func polish(raw: String, selection: String?, config: FlowConfig, targetLanguage: String? = nil) async throws -> String {
+    func polish(
+        raw: String,
+        selection: String?,
+        config: FlowConfig,
+        targetLanguage: String? = nil,
+        noteAnswer: Bool = false
+    ) async throws -> String {
         var request = URLRequest(url: endpoint("/polish", port: config.port))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let openAI = config.correctsWithOpenAI
-        let storedKey = openAI ? OpenAIKeyStore.load().trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let storedKey = OpenAIKeyStore.load().trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoints: [PolishEndpointBody] = config.activeCorrectionEndpoints.compactMap { endpoint in
+            let key = OpenAIKeyStore.key(for: endpoint).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard endpoint.isReady(hasKey: !key.isEmpty) else { return nil }
+            return PolishEndpointBody(
+                model: endpoint.model,
+                apiKey: key.isEmpty ? nil : key,
+                baseURL: endpoint.resolvedBaseURL,
+                kind: endpoint.kind
+            )
+        }
         let body = PolishBody(
             raw: raw,
             selection: selection,
@@ -150,7 +175,9 @@ final class SpeechEngine {
             provider: config.polishProvider,
             apiKey: storedKey.isEmpty ? nil : storedKey,
             openAIModel: openAI ? config.openAIModel : nil,
-            baseURL: openAI ? config.resolvedCorrectionBaseURL : nil
+            baseURL: openAI ? config.resolvedCorrectionBaseURL : nil,
+            endpoints: endpoints,
+            noteAnswer: noteAnswer
         )
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await session.data(for: request)
@@ -311,7 +338,7 @@ final class SpeechEngine {
                     } else if !health.ready {
                         self.statusText = L10n.s("engine.loadingWhisper")
                         self.statusIsLoading = true
-                    } else if config.correctsWithOpenAI && !hasKey && !config.usesCustomCorrectionAPI {
+                    } else if config.correctsWithOpenAI && !config.correctionConfigured(hasKey: hasKey) {
                         self.statusText = L10n.s("engine.readyNeedsKey")
                         self.statusIsLoading = false
                     } else {

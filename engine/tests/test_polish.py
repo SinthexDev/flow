@@ -88,6 +88,23 @@ class PolishTests(unittest.TestCase):
         self.assertIn("kannst du das zusammenfassen", user)
         self.assertNotIn("Rohtranskript", user)
 
+    def test_note_answer_uses_selection_as_context(self):
+        messages = build_messages(
+            "Speichere als Notiz, welche Farben auf der Seite sind",
+            "Die Seite ist violett und weiß.",
+            "auto",
+            "",
+            "",
+            note_answer=True,
+        )
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+        self.assertIn("nur der Kontext", system)
+        self.assertIn("Übernimm die Markierung nicht", system)
+        self.assertIn("Die Seite ist violett und weiß.", user)
+        self.assertIn("welche Farben", user)
+        self.assertNotIn("ersetzen soll", system)
+
 
 if __name__ == "__main__":
     unittest.main()

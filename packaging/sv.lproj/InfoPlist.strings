@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
 "NSMicrophoneUsageDescription" = "Sinthex Flow använder mikrofonen för att känna igen diktering lokalt på den här Macen.";
-"NSAppleEventsUsageDescription" = "Sinthex Flow infogar den dikterade texten i den aktiva appen.";
+"NSAppleEventsUsageDescription" = "Sinthex Flow infogar dikterad text i den aktiva appen och kan spara anteckningar i Anteckningar.";

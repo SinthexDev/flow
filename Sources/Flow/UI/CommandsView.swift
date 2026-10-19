@@ -10,6 +10,7 @@ struct CommandExample: Identifiable {
     var after: String { L10n.s("commands.ex.\(id).after") }
 
     static let all: [CommandExample] = [
+        CommandExample(id: "note", icon: "note.text"),
         CommandExample(id: "translate", icon: "globe"),
         CommandExample(id: "summarize", icon: "text.redaction"),
         CommandExample(id: "friendly", icon: "face.smiling"),
@@ -58,6 +59,7 @@ struct CommandsView: View {
                 tip("textformat", L10n.s("commands.tip.style"))
                 tip("arrow.uturn.backward", L10n.s("commands.tip.undo"))
                 tip("text.cursor", L10n.s("commands.tip.noSelection"))
+                tip("macwindow.on.rectangle", L10n.s("commands.tip.noField"))
             }
             .card()
         }

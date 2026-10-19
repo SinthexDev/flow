@@ -5,8 +5,11 @@ import urllib.error
 
 from flow_engine.openai_polish import (
     choose_model,
+    claude_message_text,
     complete,
+    complete_chain,
     error_message,
+    fetch_models,
     message_text,
     normalize_base_url,
     rank_models,
@@ -237,6 +240,107 @@ class OpenAIPolishTests(unittest.TestCase):
         self.assertEqual(normalize_base_url("http://127.0.0.1:11434"), "http://127.0.0.1:11434/v1")
         with self.assertRaisesRegex(RuntimeError, "http"):
             normalize_base_url("file:///tmp/model")
+
+    def test_complete_chain_skips_an_unreachable_endpoint(self):
+        calls = {"n": 0}
+
+        def opener(request, timeout):
+            calls["n"] += 1
+            if "11434" in request.full_url:
+                raise urllib.error.URLError("Connection refused")
+            return _Body(b'{"choices":[{"message":{"content":"Klar."}}]}')
+
+        text, used = complete_chain(
+            [{"role": "user", "content": "x"}],
+            [
+                {"model": "llama3.2", "apiKey": "", "baseURL": "http://127.0.0.1:11434/v1"},
+                {"model": "gpt-4.1-mini", "apiKey": "secret-key", "baseURL": "https://api.openai.com/v1"},
+            ],
+            40,
+            opener=opener,
+        )
+        self.assertEqual(text, "Klar.")
+        self.assertEqual(calls["n"], 2)
+        self.assertTrue(used)
+
+    def test_claude_complete_uses_messages_and_x_api_key(self):
+        def opener(request, timeout):
+            self.assertEqual(timeout, 45)
+            self.assertTrue(request.full_url.endswith("/messages"))
+            self.assertEqual(request.get_header("X-api-key"), "sk-ant-secret")
+            self.assertEqual(request.get_header("Anthropic-version"), "2023-06-01")
+            self.assertIsNone(request.get_header("Authorization"))
+            payload = json.loads(request.data.decode())
+            self.assertEqual(payload["model"], "claude-haiku-4-5")
+            self.assertEqual(payload["system"], "Sei knapp.")
+            self.assertEqual(payload["messages"], [{"role": "user", "content": "roher text"}])
+            return _Body(b'{"content":[{"type":"text","text":"Morgen um zehn."}]}')
+
+        text = complete(
+            [{"role": "system", "content": "Sei knapp."}, {"role": "user", "content": "roher text"}],
+            "claude-haiku-4-5",
+            "sk-ant-secret",
+            40,
+            opener=opener,
+            base_url="https://api.anthropic.com/v1",
+        )
+        self.assertEqual(text, "Morgen um zehn.")
+
+    def test_claude_message_text_joins_blocks(self):
+        self.assertEqual(
+            claude_message_text({"content": [{"type": "text", "text": "Hallo"}, {"type": "text", "text": " Welt"}]}),
+            "Hallo Welt",
+        )
+
+    def test_choose_claude_prefers_haiku(self):
+        chosen = choose_model(
+            [
+                {"id": "claude-opus-4-6"},
+                {"id": "claude-sonnet-4-5"},
+                {"id": "claude-haiku-4-5"},
+            ],
+            kind="claude",
+        )
+        self.assertEqual(chosen, "claude-haiku-4-5")
+
+    def test_cursor_models_fall_back_when_list_is_missing(self):
+        def opener(request, timeout):
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                hdrs=None,
+                fp=io.BytesIO(b'{"message":"not found"}'),
+            )
+
+        models = fetch_models("key_test", opener=opener, base_url="https://api.cursor.com/v1")
+        self.assertEqual([item["id"] for item in models], ["composer-2", "composer-2-fast"])
+
+    def test_missing_claude_key_does_not_call_the_network(self):
+        def opener(request, timeout):
+            raise AssertionError("Netz wurde aufgerufen")
+
+        with self.assertRaisesRegex(RuntimeError, "fehlt"):
+            complete(
+                [{"role": "user", "content": "x"}],
+                "claude-haiku-4-5",
+                "  ",
+                20,
+                opener=opener,
+                base_url="https://api.anthropic.com/v1",
+            )
+
+    def test_complete_chain_fails_when_every_endpoint_fails(self):
+        def opener(request, timeout):
+            raise urllib.error.URLError("down")
+
+        with self.assertRaisesRegex(RuntimeError, "erreichbar"):
+            complete_chain(
+                [{"role": "user", "content": "x"}],
+                [{"model": "llama3.2", "apiKey": "", "baseURL": "http://127.0.0.1:11434/v1"}],
+                20,
+                opener=opener,
+            )
 
 
 if __name__ == "__main__":

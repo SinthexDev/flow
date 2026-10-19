@@ -5,13 +5,13 @@ from flow_engine.transcribe import needs_warmup
 
 class WarmupTests(unittest.TestCase):
     def test_skips_when_the_model_was_just_used(self):
-        self.assertFalse(needs_warmup(last_touch=100, now=130))
+        self.assertFalse(needs_warmup(last_touch=100, now=110))
 
     def test_runs_again_after_the_interval(self):
-        self.assertTrue(needs_warmup(last_touch=100, now=160))
+        self.assertTrue(needs_warmup(last_touch=100, now=125))
 
     def test_runs_when_never_touched(self):
-        self.assertTrue(needs_warmup(last_touch=0, now=45))
+        self.assertTrue(needs_warmup(last_touch=0, now=1))
 
 
 if __name__ == "__main__":

@@ -19,7 +19,11 @@ struct MenuBarView: View {
                     .padding(.top, 10)
             }
 
-            if state.showsUpdateOffer {
+            if state.update == .checking {
+                updateChecking
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+            } else if state.showsUpdateOffer {
                 updateHint
                     .padding(.horizontal, 14)
                     .padding(.top, 10)
@@ -91,12 +95,34 @@ struct MenuBarView: View {
 
             Divider()
 
+            NoteDestinationPicker()
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+
+            notesLink
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+
+            Divider()
+
             footer
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
         }
         .frame(width: 340)
         .tint(Theme.violet)
+        .overlay(alignment: .bottom) { settingToast }
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: state.settingToastVisible)
+    }
+
+    @ViewBuilder
+    private var settingToast: some View {
+        if state.settingToastVisible {
+            SettingsSavedToast()
+                .padding(.bottom, 10)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 
     private var menuStyle: Binding<String> {
@@ -180,13 +206,29 @@ struct MenuBarView: View {
         .opacity(state.engineReady || listening ? 1 : 0.6)
     }
 
+    private var updateChecking: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(L10n.s("update.settings.checking"))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
+    }
+
     private var updateHint: some View {
         Button {
             state.installAvailableUpdate()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "arrow.down.app.fill").foregroundStyle(Theme.violet)
-                Text(L10n.s("update.menu", state.availableRelease?.version ?? ""))
+                Text(
+                    state.isDownloadingUpdate
+                        ? L10n.s("update.settings.downloading")
+                        : L10n.s("update.menu", state.availableRelease?.version ?? "")
+                )
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
                 if state.isDownloadingUpdate {
@@ -245,6 +287,33 @@ struct MenuBarView: View {
                 }
             }
         }
+    }
+
+    private var notesLink: some View {
+        Button {
+            state.openNotes()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "note.text")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.violet)
+                Text(L10n.s("menu.notes"))
+                    .font(.system(size: 12.5, weight: .medium))
+                Spacer()
+                if AppleNotesFolder.decode(state.config.noteDestination) == nil, !state.notes.isEmpty {
+                    Text("\(state.notes.count)")
+                        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var footer: some View {

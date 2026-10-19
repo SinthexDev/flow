@@ -1,8 +1,87 @@
 import Foundation
 
+struct CorrectionEndpoint: Codable, Equatable, Identifiable, Hashable {
+    var id: UUID
+    /// chatgpt / claude / cursor / custom
+    var kind: String
+    var model: String
+    var baseURL: String
+    var enabled: Bool
+
+    static let knownKinds = ["chatgpt", "claude", "cursor", "custom"]
+
+    static func chatgpt(model: String = "auto") -> CorrectionEndpoint {
+        CorrectionEndpoint(id: UUID(), kind: "chatgpt", model: model, baseURL: "", enabled: true)
+    }
+
+    static func claude(model: String = "auto") -> CorrectionEndpoint {
+        CorrectionEndpoint(id: UUID(), kind: "claude", model: model, baseURL: "", enabled: true)
+    }
+
+    static func cursor(model: String = "auto") -> CorrectionEndpoint {
+        CorrectionEndpoint(id: UUID(), kind: "cursor", model: model, baseURL: "", enabled: true)
+    }
+
+    static func custom(model: String = "auto", baseURL: String = "") -> CorrectionEndpoint {
+        CorrectionEndpoint(id: UUID(), kind: "custom", model: model, baseURL: baseURL, enabled: true)
+    }
+
+    var isChatGPT: Bool { kind == "chatgpt" }
+    var isClaude: Bool { kind == "claude" }
+    var isCursor: Bool { kind == "cursor" }
+    var isCustom: Bool { kind == "custom" }
+    /// Modellliste kommt von der API (OpenAI, Anthropic, Cursor).
+    var usesModelCatalog: Bool { !isCustom }
+    var needsAPIKey: Bool { !isCustom }
+
+    var resolvedBaseURL: String {
+        switch kind {
+        case "claude": return FlowConfig.claudeCorrectionBaseURL
+        case "cursor": return FlowConfig.cursorCorrectionBaseURL
+        case "custom": return baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        default: return FlowConfig.defaultCorrectionBaseURL
+        }
+    }
+
+    func isReady(hasKey: Bool) -> Bool {
+        if needsAPIKey { return hasKey }
+        return !resolvedBaseURL.isEmpty
+    }
+}
+
+struct CorrectionCatalog: Equatable {
+    var recommended: String = ""
+    var models: [String] = []
+}
+
+struct OverlayResult: Equatable {
+    var command: String
+    var text: String
+    /// Bei Unsicherheit: Nutzer wählt zwischen Befehl und Umformulierung.
+    var choices: [OverlayResultChoice]? = nil
+
+    var isChoice: Bool { !(choices ?? []).isEmpty }
+}
+
+struct OverlayResultChoice: Equatable, Identifiable {
+    enum Kind: String, Equatable {
+        case command
+        case reformulate
+    }
+
+    var id: String { kind.rawValue }
+    var kind: Kind
+    var title: String
+    var text: String
+}
+
 struct FlowConfig: Codable, Equatable {
     var modelPath: String
     var whisperModel: String
+    /// whisper = mlx-whisper, whistle = Cactus Whistle (kleiner, 7 Sprachen)
+    var asrEngine: String
+    /// 0 = schnell/klein … 4 = genau/groß (Whisper-Modell bzw. Whistle-Depth)
+    var asrQuality: Int
     /// local = Qwen auf diesem Mac, openai = Chat-API mit eigenem Schlüssel
     var polishProvider: String
     var openAIModel: String
@@ -10,10 +89,15 @@ struct FlowConfig: Codable, Equatable {
     var correctionBaseURL: String = ""
     /// chatgpt = OpenAI. custom = eigene Adresse und eigenes Modell.
     var correctionKind: String = "chatgpt"
+    /// false = nur das erste aktive Modell. true = Reihenfolge als Fallback.
+    var correctionFallback: Bool = false
+    /// "flow" oder Ordner der Notizen-App (Konto und Name, getrennt).
+    var noteDestination: String = FlowConfig.noteDestinationAppleNotes
+    var correctionEndpoints: [CorrectionEndpoint] = []
     /// true, sobald die alte Modell-Vorgabe einmal auf „auto“ umgestellt wurde
     var didChooseModel: Bool
     var appStyles: [AppStyleProfile]
-    /// Whisper-Sprache: auto / de / en
+    /// Erkennungssprache: auto / de / en (Whisper); plus fr/es/it/nl/pl bei Whistle
     var language: String
     /// Muttersprache für Übersetzungen (de, en, …)
     var nativeLanguage: String
@@ -29,31 +113,76 @@ struct FlowConfig: Codable, Equatable {
     var othersAudio: String
     /// Kurze Korrekturen am eingesetzten Text ins Wörterbuch übernehmen.
     var learnEdits: Bool
-    /// Once, send a hash of this Mac’s hardware UUID to Sinthex.
-    var countInstall: Bool
     var launchAtLogin: Bool
     var onboarded: Bool
     var port: Int
     /// Widget-Mitte relativ zum sichtbaren Bildschirm (0…1). nil = Standard unten mittig.
     var widgetX: Double?
     var widgetY: Double?
-    /// 0 = unbegrenzt. Sonst werden ältere Einträge nach so vielen Tagen entfernt.
-    var historyKeepDays: Int = 0
+    /// CGDirectDisplayID des Bildschirms, auf dem das Widget zu Hause ist.
+    var widgetDisplayID: Int? = nil
+    /// true = während Aufnahme/Ergebnis dem Bildschirm unter dem Zeiger folgen.
+    /// false = immer an der gespeicherten Stelle bleiben (kein Springen).
+    var widgetFollowActiveScreen: Bool = true
+    /// Floating-Widget auch im Leerlauf. Aus = Widget nur bei Aufnahme/Verarbeitung; Menüleiste bleibt.
+    var showWidget: Bool = false
+    /// Größe des Ergebnis-Fensters über dem Widget: compact / regular / large.
+    var overlayResultSize: String = OverlayResultSize.large.rawValue
+    /// Sekunden, bis das Befehlsfenster von allein schließt. 0 = bleibt offen.
+    var overlayResultDismissSeconds: Int = 15
+    /// 0 = unbegrenzt. Sonst werden ältere Einträge nach so vielen Stunden entfernt.
+    var historyKeepHours: Int = 168
     /// 0 = unbegrenzt. Sonst bleiben nur so viele neueste Einträge.
     var historyMaxEntries: Int = 500
+    /// Nach dem Diktat den erkannten Text kurz im Minifenster zeigen.
+    var showDictationPreview: Bool = true
+    /// Sekunden, bis die Diktat-Vorschau nach erfolgreichem Einfügen schließt. 0 = bleibt offen.
+    var dictationPreviewDismissSeconds: Int = 1
+    /// true = Ergebnis- und Diktat-Karten an einem festen Anker, nicht am Widget-Platz.
+    var resultPlacementFixed: Bool = true
+    /// `"pointer"` oder die Display-ID als String.
+    var resultPlacementScreen: String = resultPlacementPointerScreen
+    /// Rohwert von `ResultPlacementAnchor`.
+    var resultPlacementAnchor: String = ResultPlacementAnchor.topCenter.rawValue
 
-    static let historyKeepChoices = [0, 7, 30, 90, 365]
-    static let historyLimitChoices = [50, 100, 250, 500, 1000, 0]
+    static let resultPlacementPointerScreen = "pointer"
+
+    /// Stunden: unbegrenzt, 1 h, 2 h, 6 h, 12 h, 1 T, 2 T, 7 T, 30 T, 90 T, 1 J.
+    static let historyKeepChoices = [0, 1, 2, 6, 12, 24, 48, 168, 720, 2160, 8760]
+    static let historyLimitChoices = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 0]
+    static let overlayDismissChoices = [1, 2, 3, 5, 10, 15, 30, 60, 0]
+    static let dictationPreviewDismissChoices = [1, 2, 3, 5, 10, 0]
 
     static let defaultModel = (NSHomeDirectory() as NSString)
         .appendingPathComponent("Models/Qwen3.8-27B-Uncensored-MLX/4-bit")
     static let defaultWhisper = "mlx-community/whisper-large-v3-turbo"
+    static let defaultAsrEngine = "whisper"
+    static let defaultAsrQuality = 4
+    static let asrQualityMax = 4
     static let defaultPolishProvider = "openai"
     static let defaultOpenAIModel = "gpt-4.1-mini"
+    static let whistleLanguages = ["auto", "de", "en", "fr", "es", "it", "nl", "pl"]
+    static let whisperLanguages = ["auto", "de", "en"]
+    static let whisperModelsByQuality = [
+        "mlx-community/whisper-tiny",
+        "mlx-community/whisper-base-mlx",
+        "mlx-community/whisper-small-mlx",
+        "mlx-community/whisper-medium-mlx",
+        "mlx-community/whisper-large-v3-turbo",
+    ]
+    static let whistleDepthsByQuality = [2, 3, 4, 6, 8]
+
+    static let noteDestinationFlow = "flow"
+    /// iCloud-Ordner „Notes“, der Standardordner der Notizen-App.
+    static let noteDestinationAppleNotes = AppleNotesFolder.id(account: "iCloud", name: "Notes")
+    /// Menüeintrag, der die Ordner der Notizen-App lädt und nicht gespeichert wird.
+    static let noteDestinationPickApple = "__apple__"
 
     static let standard = FlowConfig(
         modelPath: defaultModel,
         whisperModel: defaultWhisper,
+        asrEngine: defaultAsrEngine,
+        asrQuality: defaultAsrQuality,
         polishProvider: defaultPolishProvider,
         openAIModel: "auto",
         didChooseModel: true,
@@ -69,8 +198,7 @@ struct FlowConfig: Codable, Equatable {
         playSounds: true,
         othersAudio: OthersAudio.mute.rawValue,
         learnEdits: true,
-        countInstall: true,
-        launchAtLogin: false,
+        launchAtLogin: true,
         onboarded: false,
         port: 17321,
         widgetX: nil,
@@ -80,6 +208,8 @@ struct FlowConfig: Codable, Equatable {
     init(
         modelPath: String,
         whisperModel: String,
+        asrEngine: String,
+        asrQuality: Int,
         polishProvider: String,
         openAIModel: String,
         didChooseModel: Bool,
@@ -95,7 +225,6 @@ struct FlowConfig: Codable, Equatable {
         playSounds: Bool,
         othersAudio: String,
         learnEdits: Bool,
-        countInstall: Bool,
         launchAtLogin: Bool,
         onboarded: Bool,
         port: Int,
@@ -104,6 +233,8 @@ struct FlowConfig: Codable, Equatable {
     ) {
         self.modelPath = modelPath
         self.whisperModel = whisperModel
+        self.asrEngine = asrEngine
+        self.asrQuality = min(Self.asrQualityMax, max(0, asrQuality))
         self.polishProvider = polishProvider
         self.openAIModel = openAIModel
         self.didChooseModel = didChooseModel
@@ -119,12 +250,12 @@ struct FlowConfig: Codable, Equatable {
         self.playSounds = playSounds
         self.othersAudio = othersAudio
         self.learnEdits = learnEdits
-        self.countInstall = countInstall
         self.launchAtLogin = launchAtLogin
         self.onboarded = onboarded
         self.port = port
         self.widgetX = widgetX
         self.widgetY = widgetY
+        self.correctionEndpoints = [.chatgpt(model: openAIModel)]
     }
 
     init(from decoder: Decoder) throws {
@@ -132,11 +263,24 @@ struct FlowConfig: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         modelPath = try c.decodeIfPresent(String.self, forKey: .modelPath) ?? d.modelPath
         whisperModel = try c.decodeIfPresent(String.self, forKey: .whisperModel) ?? d.whisperModel
+        if let engine = try c.decodeIfPresent(String.self, forKey: .asrEngine),
+           engine == "whisper" || engine == "whistle" {
+            asrEngine = engine
+        } else {
+            asrEngine = d.asrEngine
+        }
+        if let stored = try c.decodeIfPresent(Int.self, forKey: .asrQuality) {
+            asrQuality = min(Self.asrQualityMax, max(0, stored))
+        } else if let matched = Self.quality(forWhisperModel: whisperModel) {
+            asrQuality = matched
+        } else {
+            asrQuality = d.asrQuality
+        }
         polishProvider = try c.decodeIfPresent(String.self, forKey: .polishProvider) ?? d.polishProvider
         openAIModel = try c.decodeIfPresent(String.self, forKey: .openAIModel) ?? d.openAIModel
         correctionBaseURL = try c.decodeIfPresent(String.self, forKey: .correctionBaseURL) ?? ""
         if let kind = try c.decodeIfPresent(String.self, forKey: .correctionKind),
-           kind == "chatgpt" || kind == "custom" {
+           CorrectionEndpoint.knownKinds.contains(kind) {
             correctionKind = kind
         } else {
             let host = URL(string: correctionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased()
@@ -161,24 +305,90 @@ struct FlowConfig: Codable, Equatable {
             othersAudio = (muted ? OthersAudio.mute : OthersAudio.off).rawValue
         }
         learnEdits = try c.decodeIfPresent(Bool.self, forKey: .learnEdits) ?? true
-        countInstall = try c.decodeIfPresent(Bool.self, forKey: .countInstall) ?? true
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         onboarded = try c.decodeIfPresent(Bool.self, forKey: .onboarded) ?? d.onboarded
         port = try c.decodeIfPresent(Int.self, forKey: .port) ?? d.port
         widgetX = try c.decodeIfPresent(Double.self, forKey: .widgetX)
         widgetY = try c.decodeIfPresent(Double.self, forKey: .widgetY)
-        historyKeepDays = max(0, try c.decodeIfPresent(Int.self, forKey: .historyKeepDays) ?? 0)
+        widgetDisplayID = try c.decodeIfPresent(Int.self, forKey: .widgetDisplayID)
+        widgetFollowActiveScreen = try c.decodeIfPresent(Bool.self, forKey: .widgetFollowActiveScreen) ?? true
+        // Neu: aus = nur Menüleiste. Altes widgetAlwaysVisible wird nicht übernommen,
+        // damit der neue Standard „aus“ für alle gilt, bis man es unter Erweitert einschaltet.
+        showWidget = try c.decodeIfPresent(Bool.self, forKey: .showWidget) ?? false
+        if let size = try c.decodeIfPresent(String.self, forKey: .overlayResultSize),
+           OverlayResultSize(rawValue: size) != nil {
+            overlayResultSize = size
+        } else {
+            overlayResultSize = OverlayResultSize.large.rawValue
+        }
+        if let hours = try c.decodeIfPresent(Int.self, forKey: .historyKeepHours) {
+            historyKeepHours = max(0, hours)
+        } else if let days = try c.decodeIfPresent(Int.self, forKey: .historyKeepDays) {
+            historyKeepHours = max(0, days) * 24
+        } else {
+            historyKeepHours = 168
+        }
         historyMaxEntries = max(0, try c.decodeIfPresent(Int.self, forKey: .historyMaxEntries) ?? 500)
+        showDictationPreview = try c.decodeIfPresent(Bool.self, forKey: .showDictationPreview) ?? true
+        if let stored = try c.decodeIfPresent(Int.self, forKey: .overlayResultDismissSeconds) {
+            overlayResultDismissSeconds = max(0, stored)
+        } else {
+            overlayResultDismissSeconds = 15
+        }
+        if let stored = try c.decodeIfPresent(Int.self, forKey: .dictationPreviewDismissSeconds) {
+            dictationPreviewDismissSeconds = max(0, stored)
+        } else {
+            dictationPreviewDismissSeconds = 1
+        }
+        resultPlacementFixed = try c.decodeIfPresent(Bool.self, forKey: .resultPlacementFixed) ?? true
+        if let stored = try c.decodeIfPresent(String.self, forKey: .resultPlacementScreen), !stored.isEmpty {
+            resultPlacementScreen = stored
+        } else {
+            resultPlacementScreen = Self.resultPlacementPointerScreen
+        }
+        if let stored = try c.decodeIfPresent(String.self, forKey: .resultPlacementAnchor),
+           ResultPlacementAnchor(rawValue: stored) != nil {
+            resultPlacementAnchor = stored
+        } else {
+            resultPlacementAnchor = ResultPlacementAnchor.topCenter.rawValue
+        }
+        if let stored = try c.decodeIfPresent([CorrectionEndpoint].self, forKey: .correctionEndpoints), !stored.isEmpty {
+            correctionEndpoints = stored
+        } else {
+            correctionEndpoints = [
+                CorrectionEndpoint(
+                    id: UUID(),
+                    kind: correctionKind,
+                    model: openAIModel,
+                    baseURL: correctionBaseURL,
+                    enabled: true
+                )
+            ]
+        }
+        correctionFallback = try c.decodeIfPresent(Bool.self, forKey: .correctionFallback) ?? false
+        if let stored = try c.decodeIfPresent(String.self, forKey: .noteDestination),
+           stored == Self.noteDestinationFlow || AppleNotesFolder.decode(stored) != nil {
+            noteDestination = stored
+        } else {
+            noteDestination = Self.noteDestinationAppleNotes
+        }
+        syncLegacyCorrectionFields()
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(modelPath, forKey: .modelPath)
-        try c.encode(whisperModel, forKey: .whisperModel)
-        try c.encode(polishProvider, forKey: .polishProvider)
-        try c.encode(openAIModel, forKey: .openAIModel)
-        try c.encode(correctionBaseURL, forKey: .correctionBaseURL)
-        try c.encode(correctionKind, forKey: .correctionKind)
+        var snapshot = self
+        snapshot.syncLegacyCorrectionFields()
+        try c.encode(snapshot.modelPath, forKey: .modelPath)
+        try c.encode(snapshot.whisperModel, forKey: .whisperModel)
+        try c.encode(snapshot.asrEngine, forKey: .asrEngine)
+        try c.encode(snapshot.asrQuality, forKey: .asrQuality)
+        try c.encode(snapshot.polishProvider, forKey: .polishProvider)
+        try c.encode(snapshot.openAIModel, forKey: .openAIModel)
+        try c.encode(snapshot.correctionBaseURL, forKey: .correctionBaseURL)
+        try c.encode(snapshot.correctionKind, forKey: .correctionKind)
+        try c.encode(snapshot.correctionFallback, forKey: .correctionFallback)
+        try c.encode(snapshot.correctionEndpoints, forKey: .correctionEndpoints)
         try c.encode(didChooseModel, forKey: .didChooseModel)
         try c.encode(appStyles, forKey: .appStyles)
         try c.encode(language, forKey: .language)
@@ -193,19 +403,68 @@ struct FlowConfig: Codable, Equatable {
         try c.encode(othersAudio, forKey: .othersAudio)
         try c.encode(othersAudio != OthersAudio.off.rawValue, forKey: .muteOthers)
         try c.encode(learnEdits, forKey: .learnEdits)
-        try c.encode(countInstall, forKey: .countInstall)
         try c.encode(launchAtLogin, forKey: .launchAtLogin)
         try c.encode(onboarded, forKey: .onboarded)
         try c.encode(port, forKey: .port)
         try c.encodeIfPresent(widgetX, forKey: .widgetX)
         try c.encodeIfPresent(widgetY, forKey: .widgetY)
-        try c.encode(historyKeepDays, forKey: .historyKeepDays)
+        try c.encodeIfPresent(widgetDisplayID, forKey: .widgetDisplayID)
+        try c.encode(widgetFollowActiveScreen, forKey: .widgetFollowActiveScreen)
+        try c.encode(showWidget, forKey: .showWidget)
+        try c.encode(overlayResultSize, forKey: .overlayResultSize)
+        try c.encode(overlayResultDismissSeconds, forKey: .overlayResultDismissSeconds)
+        try c.encode(historyKeepHours, forKey: .historyKeepHours)
         try c.encode(historyMaxEntries, forKey: .historyMaxEntries)
+        try c.encode(showDictationPreview, forKey: .showDictationPreview)
+        try c.encode(dictationPreviewDismissSeconds, forKey: .dictationPreviewDismissSeconds)
+        try c.encode(resultPlacementFixed, forKey: .resultPlacementFixed)
+        try c.encode(resultPlacementScreen, forKey: .resultPlacementScreen)
+        try c.encode(resultPlacementAnchor, forKey: .resultPlacementAnchor)
+        try c.encode(noteDestination, forKey: .noteDestination)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case modelPath, whisperModel, polishProvider, openAIModel, correctionBaseURL, correctionKind, didChooseModel, appStyles, language, nativeLanguage, style, instructions, dictionary
-        case commandMode, autoCorrect, hotkey, playSounds, muteOthers, othersAudio, learnEdits, countInstall, launchAtLogin, onboarded, port, widgetX, widgetY, historyKeepDays, historyMaxEntries
+        case modelPath, whisperModel, asrEngine, asrQuality, polishProvider, openAIModel, correctionBaseURL, correctionKind, correctionFallback, correctionEndpoints, didChooseModel, appStyles, language, nativeLanguage, style, instructions, dictionary
+        case commandMode, autoCorrect, hotkey, playSounds, muteOthers, othersAudio, learnEdits, launchAtLogin, onboarded, port, widgetX, widgetY, widgetDisplayID, widgetFollowActiveScreen, showWidget, widgetAlwaysVisible, overlayResultSize, overlayResultDismissSeconds, historyKeepHours, historyKeepDays, historyMaxEntries, showDictationPreview, dictationPreviewDismissSeconds, resultPlacementFixed, resultPlacementScreen, resultPlacementAnchor, noteDestination
+    }
+
+    var usesWhistle: Bool { asrEngine == "whistle" }
+
+    var recognitionLanguages: [String] {
+        usesWhistle ? Self.whistleLanguages : Self.whisperLanguages
+    }
+
+    var clampedAsrQuality: Int {
+        min(Self.asrQualityMax, max(0, asrQuality))
+    }
+
+    var whistleDepth: Int {
+        Self.whistleDepthsByQuality[clampedAsrQuality]
+    }
+
+    var resolvedWhisperModel: String {
+        Self.whisperModel(for: clampedAsrQuality)
+    }
+
+    static func whisperModel(for quality: Int) -> String {
+        let index = min(asrQualityMax, max(0, quality))
+        return whisperModelsByQuality[index]
+    }
+
+    static func whistleDepth(for quality: Int) -> Int {
+        let index = min(asrQualityMax, max(0, quality))
+        return whistleDepthsByQuality[index]
+    }
+
+    static func quality(forWhisperModel model: String) -> Int? {
+        whisperModelsByQuality.firstIndex(of: model)
+    }
+
+    mutating func applyAsrQuality(_ quality: Int) {
+        asrQuality = min(Self.asrQualityMax, max(0, quality))
+        if !usesWhistle {
+            whisperModel = Self.whisperModel(for: asrQuality)
+        }
     }
 
     static var snapshotDemo: FlowConfig {
@@ -216,6 +475,11 @@ struct FlowConfig: Codable, Equatable {
         config.didChooseModel = true
         config.onboarded = true
         config.dictionary = "sintex flow -> Sinthex Flow\nbeexperts -> beeXperts"
+        config.correctionFallback = true
+        config.correctionEndpoints = [
+            CorrectionEndpoint.chatgpt(model: "auto"),
+            CorrectionEndpoint.custom(model: "llama3.2", baseURL: "http://127.0.0.1:11434/v1"),
+        ]
         config.appStyles = [
             AppStyleProfile(bundleID: "com.apple.mail", name: "Mail", style: "email", suggested: "email", customized: false),
             AppStyleProfile(bundleID: "com.apple.MobileSMS", name: "Nachrichten", style: "chat", suggested: "chat", customized: false),
@@ -249,6 +513,7 @@ struct FlowConfig: Codable, Equatable {
                 config.save()
             }
         }
+        config.syncLegacyCorrectionFields()
         let parsed = DictionaryItem.parse(config.dictionary)
         let kept = parsed.filter(\.isKept)
         if kept.count != parsed.count {
@@ -270,6 +535,22 @@ struct FlowConfig: Codable, Equatable {
         Hotkey(rawValue: hotkey) ?? .function
     }
 
+    var resolvedOverlayResultSize: OverlayResultSize {
+        OverlayResultSize(rawValue: overlayResultSize) ?? .regular
+    }
+
+    var resolvedOverlayDismissSeconds: Int {
+        max(0, overlayResultDismissSeconds)
+    }
+
+    var resolvedDictationPreviewDismissSeconds: Int {
+        max(0, dictationPreviewDismissSeconds)
+    }
+
+    var resolvedResultPlacementAnchor: ResultPlacementAnchor {
+        ResultPlacementAnchor(rawValue: resultPlacementAnchor) ?? .bottomCenter
+    }
+
     var othersAudioMode: OthersAudio {
         OthersAudio(rawValue: othersAudio) ?? .mute
     }
@@ -277,26 +558,68 @@ struct FlowConfig: Codable, Equatable {
     var correctsWithOpenAI: Bool { polishProvider == "openai" }
 
     static let defaultCorrectionBaseURL = "https://api.openai.com/v1"
+    static let claudeCorrectionBaseURL = "https://api.anthropic.com/v1"
+    static let cursorCorrectionBaseURL = "https://api.cursor.com/v1"
+
+    mutating func syncLegacyCorrectionFields() {
+        if correctionEndpoints.isEmpty {
+            correctionEndpoints = [.chatgpt(model: openAIModel.isEmpty ? "auto" : openAIModel)]
+        }
+        guard let first = correctionEndpoints.first else { return }
+        correctionKind = first.kind
+        openAIModel = first.model
+        correctionBaseURL = first.baseURL
+    }
+
+    var enabledCorrectionEndpoints: [CorrectionEndpoint] {
+        correctionEndpoints.filter(\.enabled)
+    }
+
+    /// Modelle, die jetzt an der Reihe sind: eines, oder die ganze Liste als Fallback.
+    var activeCorrectionEndpoints: [CorrectionEndpoint] {
+        let enabled = enabledCorrectionEndpoints
+        if correctionFallback { return enabled }
+        return Array(enabled.prefix(1))
+    }
 
     var resolvedCorrectionBaseURL: String {
-        if correctionKind != "custom" { return Self.defaultCorrectionBaseURL }
-        return correctionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        activeCorrectionEndpoints.first?.resolvedBaseURL
+            ?? (correctionKind != "custom" ? Self.defaultCorrectionBaseURL : correctionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// Eigenes Modell über eine OpenAI-kompatible Adresse. Der Schlüssel ist dann optional.
-    var usesCustomCorrectionAPI: Bool { correctionKind == "custom" }
+    var usesCustomCorrectionAPI: Bool {
+        let active = activeCorrectionEndpoints
+        return !active.isEmpty && active.allSatisfy(\.isCustom)
+    }
+
+    var usesClaudeCorrection: Bool {
+        let active = activeCorrectionEndpoints
+        return active.count == 1 && active[0].isClaude
+    }
+
+    var usesCursorCorrection: Bool {
+        let active = activeCorrectionEndpoints
+        return active.count == 1 && active[0].isCursor
+    }
+
+    var usesFallbackCorrection: Bool {
+        correctionFallback && enabledCorrectionEndpoints.count > 1
+    }
 
     func correctionConfigured(hasKey: Bool) -> Bool {
-        if usesCustomCorrectionAPI {
-            return correctsWithOpenAI && !resolvedCorrectionBaseURL.isEmpty
+        guard correctsWithOpenAI else { return false }
+        return activeCorrectionEndpoints.contains { endpoint in
+            if endpoint.isChatGPT { return endpoint.isReady(hasKey: hasKey) }
+            let key = OpenAIKeyStore.key(for: endpoint)
+            return endpoint.isReady(hasKey: !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        return correctsWithOpenAI && hasKey
     }
 
     func trimmedHistory(_ entries: [HistoryEntry], now: Date = Date()) -> [HistoryEntry] {
         var items = entries
-        if historyKeepDays > 0 {
-            let cutoff = Calendar.current.date(byAdding: .day, value: -historyKeepDays, to: now) ?? now
+        if historyKeepHours > 0 {
+            let cutoff = Calendar.current.date(byAdding: .hour, value: -historyKeepHours, to: now) ?? now
             items = items.filter { $0.date >= cutoff }
         }
         if historyMaxEntries > 0, items.count > historyMaxEntries {
@@ -331,6 +654,7 @@ enum SupportPaths {
 
     static var config: URL { directory.appendingPathComponent("config.json") }
     static var history: URL { directory.appendingPathComponent("history.json") }
+    static var notes: URL { directory.appendingPathComponent("notes.json") }
     static var models: URL {
         let url = directory.appendingPathComponent("models", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -382,6 +706,10 @@ struct HistoryEntry: Codable, Identifiable, Equatable {
     var duration: Double?
     var app: String?
     var wasCommand: Bool?
+    /// `"clipboard"` keeps text that was on the clipboard before an insert failed.
+    var kind: String? = nil
+
+    var keepsClipboard: Bool { kind == "clipboard" }
 
     var words: Int {
         text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count

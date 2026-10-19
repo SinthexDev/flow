@@ -19,6 +19,17 @@ struct MainView: View {
         .frame(minWidth: 920, minHeight: 620)
         .tint(Theme.violet)
         .ignoresSafeArea()
+        .overlay(alignment: .bottom) { settingToast }
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: state.settingToastVisible)
+    }
+
+    @ViewBuilder
+    private var settingToast: some View {
+        if state.settingToastVisible {
+            SettingsSavedToast()
+                .padding(.bottom, 22)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 
     @ViewBuilder
@@ -27,6 +38,7 @@ struct MainView: View {
         case .home: HomeView()
         case .commands: CommandsView()
         case .history: HistoryView()
+        case .notes: NotesView()
         case .style: StyleView()
         case .dictionary: DictionaryView()
         case .settings: SettingsView()
@@ -93,6 +105,11 @@ private struct SidebarItem: View {
                         .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+                if section == .notes, !state.notes.isEmpty {
+                    Text("\(state.notes.count)")
+                        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 if section == .commands, !commandsSeen || SnapshotMode.isActive, !selected {
                     Text(L10n.s("nav.new"))
                         .font(.system(size: 9.5, weight: .bold))
@@ -134,9 +151,7 @@ private struct EngineCard: View {
             Text(state.modelDisplayName)
                 .font(.system(size: 11.5, weight: .medium))
                 .lineLimit(2)
-            Text(state.config.usesCustomCorrectionAPI
-                 ? L10n.s("main.stack.custom")
-                 : (state.config.correctsWithOpenAI ? L10n.s("main.stack.on") : L10n.s("main.stack.off")))
+            Text(stackLabel)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
             if state.engineState == .error {
@@ -161,6 +176,14 @@ private struct EngineCard: View {
         case .loading: return L10n.s("status.loading")
         case .error: return L10n.s("status.error")
         }
+    }
+
+    private var stackLabel: String {
+        if state.config.usesFallbackCorrection { return L10n.s("main.stack.custom") }
+        if state.config.usesCustomCorrectionAPI { return L10n.s("main.stack.custom") }
+        if state.config.usesClaudeCorrection { return L10n.s("main.stack.claude") }
+        if state.config.usesCursorCorrection { return L10n.s("main.stack.cursor") }
+        return state.config.correctsWithOpenAI ? L10n.s("main.stack.on") : L10n.s("main.stack.off")
     }
 }
 

@@ -1,4 +1,4 @@
-"""HTTP-Dienst: Whisper transkribiert, OpenAI oder Qwen formuliert."""
+"""HTTP-Dienst: Whisper oder Whistle transkribiert, OpenAI oder Qwen formuliert."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from flow_engine.openai_polish import complete, model_catalog, resolve_model
+from flow_engine.openai_polish import complete_chain, model_catalog
 from flow_engine.polish import (
     apply_dictionary,
     build_messages,
@@ -20,10 +20,20 @@ from flow_engine.polish import (
     token_budget,
     weighted_terms,
 )
-from flow_engine.transcribe import needs_warmup, transcribe_wav, warmup
+from flow_engine.transcribe import (
+    needs_warmup,
+    resolve_asr_engine,
+    resolve_asr_quality,
+    transcribe_wav,
+    transcribe_whistle,
+    warmup,
+    warmup_whistle,
+    whisper_model_for_quality,
+)
 
 DEFAULT_MODEL = str(Path.home() / "Models" / "Qwen3.8-27B-Uncensored-MLX" / "4-bit")
 DEFAULT_WHISPER = "mlx-community/whisper-large-v3-turbo"
+DEFAULT_ASR_ENGINE = "whisper"
 DEFAULT_POLISH_PROVIDER = "openai"
 DEFAULT_PORT = 17321
 MAX_AUDIO = 30_000_000
@@ -37,13 +47,15 @@ def support_dir() -> Path:
 
 
 def configure_cache() -> None:
-    """Whisper-Gewichte liegen im Sinthex-Flow-Ordner, nicht im allgemeinen Hugging-Face-Cache."""
+    """ASR-Gewichte liegen im Sinthex-Flow-Ordner, nicht im allgemeinen Hugging-Face-Cache."""
     root = support_dir() / "models"
     hub = root / "hub"
     hub.mkdir(parents=True, exist_ok=True)
     os.environ["HF_HOME"] = str(root)
     os.environ["HF_HUB_CACHE"] = str(hub)
     os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub)
+    os.environ["FLOW_MODELS"] = str(root)
+    os.environ.setdefault("NEEDLE_TELEMETRY", "0")
 
 
 def read_config() -> dict:
@@ -83,18 +95,25 @@ class Engine:
         config = read_config()
         self.model_path = os.path.expanduser(config.get("modelPath") or DEFAULT_MODEL)
         self.polish_provider = (config.get("polishProvider") or DEFAULT_POLISH_PROVIDER).strip()
-        whisper_model = config.get("whisperModel") or DEFAULT_WHISPER
-        # Die Korrektur blockiert den Start nicht. Whisper wird immer zuerst bereit.
+        asr = resolve_asr_engine(config.get("asrEngine") or DEFAULT_ASR_ENGINE)
+        quality = resolve_asr_quality(config.get("asrQuality"))
+        whisper_model = config.get("whisperModel") or whisper_model_for_quality(quality)
+        # Die Korrektur blockiert den Start nicht. Die Spracherkennung wird immer zuerst bereit.
         if self.polish_provider == "openai":
             self.polish_ready = True
             self.polish_error = None
         else:
             self.polish_ready = False
 
-        print(f"Lade Whisper {whisper_model}", flush=True)
-        warmup(whisper_model)
+        if asr == "whistle":
+            print(f"Lade Whistle (Qualität {quality})", flush=True)
+            warmup_whistle(quality=quality)
+            print("Whistle bereit", flush=True)
+        else:
+            print(f"Lade Whisper {whisper_model}", flush=True)
+            warmup(whisper_model)
+            print("Whisper bereit", flush=True)
         self._last_touch = time.perf_counter()
-        print("Whisper bereit", flush=True)
         self.ready = True
 
     def _load_language_model(self) -> None:
@@ -117,29 +136,45 @@ class Engine:
                 raise RuntimeError(self.error or "Modell wird noch geladen")
             config = read_config()
             terms = weighted_terms(config.get("dictionary") or "")
-            text, detected = transcribe_wav(
-                wav,
-                config.get("whisperModel") or DEFAULT_WHISPER,
-                language or config.get("language") or "auto",
-                clip_glossary(terms),
-            )
+            glossary = clip_glossary(terms)
+            lang = language or config.get("language") or "auto"
+            asr = resolve_asr_engine(config.get("asrEngine") or DEFAULT_ASR_ENGINE)
+            quality = resolve_asr_quality(config.get("asrQuality"))
+            if asr == "whistle":
+                text, detected = transcribe_whistle(
+                    wav, lang, keywords=terms, quality=quality
+                )
+            else:
+                text, detected = transcribe_wav(
+                    wav,
+                    config.get("whisperModel") or whisper_model_for_quality(quality),
+                    lang,
+                    glossary,
+                )
             self._last_touch = time.perf_counter()
             return {"text": text, "language": detected}
 
     def touch(self, _payload=None) -> dict:
-        """Läuft Whisper einmal kurz, damit die Gewichte vor dem eigentlichen Diktat wieder im Speicher sind."""
+        """Kurzer ASR-Durchlauf, damit die Gewichte vor dem Diktat wieder im Speicher sind."""
         with self._lock:
             if not self.ready:
                 return {"ok": False}
             now = time.perf_counter()
             if not needs_warmup(self._last_touch, now):
                 return {"ok": True, "skipped": True}
-            model = read_config().get("whisperModel") or DEFAULT_WHISPER
+            config = read_config()
+            asr = resolve_asr_engine(config.get("asrEngine") or DEFAULT_ASR_ENGINE)
+            quality = resolve_asr_quality(config.get("asrQuality"))
             started = time.perf_counter()
-            warmup(model)
+            if asr == "whistle":
+                warmup_whistle(quality=quality)
+                label = "Whistle"
+            else:
+                warmup(config.get("whisperModel") or whisper_model_for_quality(quality))
+                label = "Whisper"
             elapsed = time.perf_counter() - started
             self._last_touch = time.perf_counter()
-            print(f"Whisper aufgewärmt in {elapsed:.1f}s", flush=True)
+            print(f"{label} aufgewärmt in {elapsed:.1f}s", flush=True)
             return {"ok": True, "ms": int(elapsed * 1000)}
 
     def polish(self, payload: dict) -> dict:
@@ -152,30 +187,38 @@ class Engine:
             selection = payload.get("selection") or None
             if isinstance(selection, str):
                 selection = selection.strip() or None
-                if selection and len(selection) > 20000:
-                    selection = None
+            note_answer = bool(payload.get("noteAnswer"))
+            if selection and len(selection) > 20000:
+                selection = selection[:20000] if note_answer else None
             style = payload.get("style") or "auto"
             instructions = payload.get("instructions") or ""
             dictionary = payload.get("dictionary") or ""
             target = payload.get("targetLanguage") or None
             if isinstance(target, str):
                 target = target.strip() or None
-            fuzzy = not (selection or target)
+            # Feste Ersetzungen vor der Korrektur, damit das Modell den Namen nicht zurückschreibt.
+            # Nahe Schreibweisen nur beim normalen Diktat, nicht in Markierung oder Übersetzung.
+            fuzzy = not (selection or target or note_answer)
             raw = apply_dictionary(raw, dictionary, fuzzy=fuzzy)
             messages = build_messages(
-                raw, selection, style, instructions, dictionary, target_language=target
+                raw, selection, style, instructions, dictionary,
+                target_language=target, note_answer=note_answer,
             )
             provider = (payload.get("provider") or read_config().get("polishProvider") or self.polish_provider).strip()
             budget_raw = selection if target else raw
             budget = token_budget(budget_raw or raw, None if target else selection)
+            if note_answer:
+                budget = min(budget, 500)
             started = time.perf_counter()
             if provider == "openai":
-                api_key = str(payload.get("apiKey") or "")
-                base_url = str(payload.get("baseURL") or "")
-                model = str(payload.get("resolvedModel") or "").strip() or resolve_model(
-                    api_key, base_url=base_url
-                )
-                text = complete(messages, model, api_key, budget, base_url=base_url)
+                endpoints = payload.get("endpoints")
+                if not isinstance(endpoints, list) or not endpoints:
+                    endpoints = [{
+                        "model": str(payload.get("resolvedModel") or payload.get("openAIModel") or "auto"),
+                        "apiKey": str(payload.get("apiKey") or ""),
+                        "baseURL": str(payload.get("baseURL") or ""),
+                    }]
+                text, model = complete_chain(messages, endpoints, budget)
                 elapsed = time.perf_counter() - started
                 print(f"Korrektur {model} in {elapsed:.1f}s", flush=True)
             else:
@@ -332,18 +375,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/polish":
                 payload = json.loads(raw.decode("utf-8") or "{}")
-                provider = (
-                    payload.get("provider") or read_config().get("polishProvider") or ENGINE.polish_provider
-                ).strip()
-                if provider == "openai":
-                    requested = str(payload.get("openAIModel") or "").strip()
-                    base_url = str(payload.get("baseURL") or "")
-                    if requested and requested != "auto":
-                        payload["resolvedModel"] = requested
-                    else:
-                        payload["resolvedModel"] = resolve_model(
-                            str(payload.get("apiKey") or ""), base_url=base_url
-                        )
                 self._send(200, call_model(ENGINE.polish, payload))
                 return
             self._send(404, {"error": "nicht gefunden"})

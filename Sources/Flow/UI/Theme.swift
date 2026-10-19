@@ -166,6 +166,30 @@ struct VisualEffect: NSViewRepresentable {
     }
 }
 
+struct SettingsSavedToast: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.violet)
+            Text(L10n.s("settings.saved"))
+                .font(.system(size: 13, weight: .semibold))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            Capsule(style: .continuous)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.16), radius: 14, y: 6)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(Theme.violet.opacity(0.35), lineWidth: 1)
+        )
+        .allowsHitTesting(false)
+    }
+}
+
 struct Page<Content: View, Accessory: View>: View {
     let title: String
     let subtitle: String

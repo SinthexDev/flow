@@ -1,6 +1,7 @@
 import AVFoundation
 import Cocoa
 import Combine
+import Darwin
 
 enum Phase: Equatable {
     case idle
@@ -13,6 +14,19 @@ enum Phase: Equatable {
     case notice(String)
 }
 
+enum DictationPreviewStatus: Equatable {
+    case working
+    case inserted
+    case copied
+}
+
+struct DictationPreview: Equatable {
+    var text: String
+    var status: DictationPreviewStatus
+    /// false = normales Diktat; true = Befehl/Umformulierung auf Markierung.
+    var wasCommand: Bool = false
+}
+
 enum EngineState {
     case ready
     case loading
@@ -23,6 +37,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     case home
     case commands
     case history
+    case notes
     case style
     case dictionary
     case settings
@@ -34,6 +49,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .home: return L10n.s("nav.home")
         case .commands: return L10n.s("nav.commands")
         case .history: return L10n.s("nav.history")
+        case .notes: return L10n.s("nav.notes")
         case .style: return L10n.s("nav.style")
         case .dictionary: return L10n.s("nav.dictionary")
         case .settings: return L10n.s("nav.settings")
@@ -45,6 +61,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .home: return "house"
         case .commands: return "wand.and.stars"
         case .history: return "clock.arrow.circlepath"
+        case .notes: return "note.text"
         case .style: return "textformat"
         case .dictionary: return "character.book.closed"
         case .settings: return "gearshape"
@@ -65,6 +82,9 @@ final class AppState: ObservableObject {
     @Published var polishAvailable = true
     @Published var correctionModel = ""
     @Published var correctionModels: [String] = []
+    @Published var correctionCatalogs: [String: CorrectionCatalog] = [:]
+    /// Letzter Fehler beim Laden der Modellliste, Schlüssel ist die API-Basisadresse.
+    @Published var correctionLookupErrors: [String: String] = [:]
     @Published var frontApp: FrontApp?
     @Published var engineStatus = L10n.s("engine.loadingModel")
     @Published var engineLoading = true
@@ -72,6 +92,11 @@ final class AppState: ObservableObject {
     @Published var axGranted = false
     @Published var widgetHovered = false
     @Published var widgetTranslateOpen = false
+    @Published var overlayResult: OverlayResult?
+    @Published var dictationPreview: DictationPreview?
+    @Published var notePreview: SavedNotePreview?
+    /// Notiz, die die Notizen-Seite nach dem Öffnen auswählen soll.
+    @Published var noteToOpen: UUID?
     @Published var widgetDragging = false
     @Published var section: MainSection = .home
     @Published var update: UpdateStatus = .idle
@@ -81,21 +106,34 @@ final class AppState: ObservableObject {
             guard config != oldValue else { return }
             config.save()
             configChanged?(oldValue, config)
-            if oldValue.historyKeepDays != config.historyKeepDays
+            if oldValue.historyKeepHours != config.historyKeepHours
                 || oldValue.historyMaxEntries != config.historyMaxEntries {
                 pruneHistory()
             }
+            if settingToastSuppressed == 0 {
+                noteSettingChanged()
+            }
         }
     }
+    /// Unten im Fenster, sobald eine Einstellung gespeichert wurde.
+    @Published var settingToastVisible = false
+    @Published private(set) var settingToastToken = UUID()
+    private var settingToastSuppressed = 0
+    private var settingToastHide: DispatchWorkItem?
     @Published private(set) var history: [HistoryEntry]
+    @Published private(set) var notes: [FlowNote]
+    @Published var appleNoteFolders: [AppleNotesFolder] = []
+    @Published var appleNotesStatus: String?
 
     var configChanged: ((FlowConfig, FlowConfig) -> Void)?
     var toggleRecording: () -> Void = {}
     var openMain: (MainSection?) -> Void = { _ in }
+    var openNotes: () -> Void = {}
     var reloadEngine: () -> Void = {}
-    var lookupCorrectionModel: (String) -> Void = { _ in }
+    var lookupCorrectionModel: (String, String) -> Void = { _, _ in }
     var finishOnboarding: () -> Void = {}
     var translateSelection: (String) -> Void = { _ in }
+    var applyOverlayChoice: ((OverlayResultChoice) -> Void)?
     private var updateTask: Task<Void, Never>?
 
     init() {
@@ -103,10 +141,16 @@ final class AppState: ObservableObject {
         let loaded = HistoryStore.load()
         let trimmed = loadedConfig.trimmedHistory(loaded)
         history = trimmed
+        notes = NoteStore.load()
         config = loadedConfig
         if trimmed.count != loaded.count {
             HistoryStore.save(trimmed)
         }
+    }
+
+    func selectOverlayChoice(_ choice: OverlayResultChoice) {
+        overlayResult = nil
+        applyOverlayChoice?(choice)
     }
 
     var isBusy: Bool {
@@ -122,28 +166,33 @@ final class AppState: ObservableObject {
     }
 
     var modelDisplayName: String {
-        let id = config.whisperModel.split(separator: "/").last.map(String.init) ?? L10n.s("model.local")
+        if config.usesWhistle {
+            return L10n.s("model.whistle.depth", config.whistleDepth)
+        }
+        let id = config.resolvedWhisperModel.split(separator: "/").last.map(String.init) ?? L10n.s("model.local")
         return L10n.s("model.whisper", id)
     }
 
     func rememberApp(_ app: FrontApp) {
-        if let index = config.appStyles.firstIndex(where: { $0.bundleID == app.bundleID }) {
-            if config.appStyles[index].name != app.name {
-                config.appStyles[index].name = app.name
+        withoutSettingToast {
+            if let index = config.appStyles.firstIndex(where: { $0.bundleID == app.bundleID }) {
+                if config.appStyles[index].name != app.name {
+                    config.appStyles[index].name = app.name
+                }
+                return
             }
-            return
-        }
-        let suggested = AppStyleCatalog.suggest(bundleID: app.bundleID, name: app.name)
-        config.appStyles.append(
-            AppStyleProfile(
-                bundleID: app.bundleID,
-                name: app.name,
-                style: suggested,
-                suggested: suggested,
-                customized: false
+            let suggested = AppStyleCatalog.suggest(bundleID: app.bundleID, name: app.name)
+            config.appStyles.append(
+                AppStyleProfile(
+                    bundleID: app.bundleID,
+                    name: app.name,
+                    style: suggested,
+                    suggested: suggested,
+                    customized: false
+                )
             )
-        )
-        config.appStyles.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            config.appStyles.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }
     }
 
     func mergeInstalledApps(_ apps: [FrontApp]) {
@@ -181,7 +230,29 @@ final class AppState: ObservableObject {
         }
         guard changed else { return }
         next.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        config.appStyles = next
+        withoutSettingToast { config.appStyles = next }
+    }
+
+    /// Programm schreibt die Konfiguration, ohne den Speicher-Toast.
+    func withoutSettingToast(_ body: () -> Void) {
+        settingToastSuppressed += 1
+        body()
+        settingToastSuppressed -= 1
+    }
+
+    /// Kurzer Hinweis unten, dass die letzte Änderung liegt.
+    func noteSettingChanged() {
+        guard settingToastSuppressed == 0, !SnapshotMode.isActive else { return }
+        if !settingToastVisible {
+            settingToastToken = UUID()
+            settingToastVisible = true
+        }
+        settingToastHide?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.settingToastVisible = false
+        }
+        settingToastHide = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.7, execute: work)
     }
 
     func setAppStyle(bundleID: String, name: String, style: String) {
@@ -237,12 +308,15 @@ final class AppState: ObservableObject {
         availableRelease != nil && !dismissedUpdate
     }
 
-    func checkForUpdate(userInitiated: Bool = false) {
+    /// `autoInstall` defaults to background checks (launch): offer and install.
+    /// Menu and Settings pass `false` so the user sees the offer first.
+    func checkForUpdate(userInitiated: Bool = false, autoInstall: Bool? = nil) {
         guard !SnapshotMode.isActive else { return }
         if case .downloading = update { return }
+        let install = autoInstall ?? !userInitiated
         updateTask?.cancel()
         updateTask = Task { [weak self] in
-            await self?.performUpdateCheck(userInitiated: userInitiated)
+            await self?.performUpdateCheck(userInitiated: userInitiated, autoInstall: install)
         }
     }
 
@@ -264,7 +338,8 @@ final class AppState: ObservableObject {
     }
 
     @MainActor
-    private func performUpdateCheck(userInitiated: Bool) async {
+    private func performUpdateCheck(userInitiated: Bool, autoInstall: Bool) async {
+        let previous = update
         update = .checking
         do {
             let release = try await UpdateCheck.fetch()
@@ -272,7 +347,7 @@ final class AppState: ObservableObject {
             if UpdateCheck.isNewer(release.version, than: L10n.appVersion) {
                 dismissedUpdate = UpdateCheck.dismissedVersion == release.version
                 update = .available(release)
-                if !dismissedUpdate {
+                if autoInstall, !dismissedUpdate {
                     beginUpdate()
                 }
             } else {
@@ -280,7 +355,13 @@ final class AppState: ObservableObject {
             }
         } catch {
             guard !Task.isCancelled else { return }
-            update = userInitiated ? .failed : .idle
+            if userInitiated {
+                update = .failed
+            } else if case .available = previous {
+                update = previous
+            } else {
+                update = .idle
+            }
         }
     }
 
@@ -299,14 +380,19 @@ final class AppState: ObservableObject {
     @MainActor
     private func performInstall(_ release: AppRelease) async {
         update = .downloading(release)
+        let hudPid = UpdateProgressHud.spawnDetached(version: release.version)
         do {
             let pkg = try await UpdateCheck.download(release)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                if let hudPid { kill(hudPid, SIGTERM) }
+                return
+            }
             try await Task.detached(priority: .userInitiated) {
                 try UpdateCheck.stageRelaunch(pkg: pkg, version: release.version)
             }.value
             NSApp.terminate(nil)
         } catch {
+            if let hudPid { kill(hudPid, SIGTERM) }
             guard !Task.isCancelled else { return }
             update = .failed
         }
@@ -367,16 +453,152 @@ final class AppState: ObservableObject {
         HistoryStore.save(history)
     }
 
+    @discardableResult
+    func createNote() -> UUID {
+        let now = Date()
+        let note = FlowNote(id: UUID(), created: now, updated: now, title: "", body: "")
+        notes.insert(note, at: 0)
+        NoteStore.save(notes)
+        return note.id
+    }
+
+    @discardableResult
+    func addNote(body: String, title: String? = nil) -> UUID? {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let now = Date()
+        let resolved = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let note = FlowNote(
+            id: UUID(),
+            created: now,
+            updated: now,
+            title: (resolved?.isEmpty == false) ? resolved! : FlowNote.derivedTitle(from: trimmed),
+            body: trimmed
+        )
+        notes.insert(note, at: 0)
+        NoteStore.save(notes)
+        return note.id
+    }
+
+    func updateNote(id: UUID, title: String, body: String) {
+        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        guard notes[index].title != title || notes[index].body != body else { return }
+        notes[index].title = title
+        notes[index].body = body
+        notes[index].updated = Date()
+        NoteStore.save(notes)
+    }
+
+    func refreshAppleNoteFolders() {
+        appleNotesStatus = L10n.s("notes.destination.loading")
+        Task {
+            do {
+                let folders = try await AppleNotes.folders()
+                await MainActor.run {
+                    self.appleNoteFolders = folders
+                    self.appleNotesStatus = folders.isEmpty ? L10n.s("notes.destination.none") : nil
+                }
+            } catch {
+                await MainActor.run {
+                    let denied = (error as? AppleNotesFailure)?.denied == true
+                    self.appleNotesStatus = L10n.s(denied ? "notes.destination.denied" : "notes.destination.failed")
+                }
+            }
+        }
+    }
+
+    func saveCapturedText(_ body: String) async -> NoteSaveOutcome {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .flow }
+        let destination = await MainActor.run { self.config.noteDestination }
+        if let folder = AppleNotesFolder.decode(destination) {
+            do {
+                let title = FlowNote.derivedTitle(from: trimmed)
+                let noteID = try await AppleNotes.createNote(title: title, body: trimmed, account: folder.account, folder: folder.name)
+                AppleNotes.remember(noteID)
+                let preview = SavedNotePreview(
+                    body: trimmed,
+                    place: .apple(account: folder.account, folder: folder.name, noteID: noteID)
+                )
+                await MainActor.run { self.presentSavedNote(preview) }
+                return .apple(folder: folder.name)
+            } catch {
+                let preview = await MainActor.run { () -> SavedNotePreview? in
+                    guard let id = self.addNote(body: trimmed) else { return nil }
+                    return SavedNotePreview(body: trimmed, place: .flow(id))
+                }
+                if let preview {
+                    await MainActor.run { self.presentSavedNote(preview) }
+                }
+                return .fallback
+            }
+        }
+        let preview = await MainActor.run { () -> SavedNotePreview? in
+            guard let id = self.addNote(body: trimmed) else { return nil }
+            return SavedNotePreview(body: trimmed, place: .flow(id))
+        }
+        if let preview {
+            await MainActor.run { self.presentSavedNote(preview) }
+        }
+        return .flow
+    }
+
+    func presentSavedNote(_ preview: SavedNotePreview) {
+        overlayResult = nil
+        dictationPreview = nil
+        notePreview = preview
+    }
+
+    func openSavedNote() {
+        guard let preview = notePreview else { return }
+        notePreview = nil
+        switch preview.place {
+        case .flow(let id):
+            noteToOpen = id
+            openMain(.notes)
+        case .apple(let account, let folder, let noteID):
+            Task {
+                try? await AppleNotes.reveal(account: account, folder: folder, noteID: noteID)
+            }
+        }
+    }
+
+    func deleteNote(_ id: UUID) {
+        notes.removeAll { $0.id == id }
+        NoteStore.save(notes)
+    }
+
     func copy(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }
 
-    var totalWords: Int { history.reduce(0) { $0 + $1.words } }
+    /// Previous clipboard contents, kept when dictation could not be inserted into a field.
+    func rememberClipboard(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if history.first?.keepsClipboard == true, history.first?.text == text { return }
+        addHistory(HistoryEntry(
+            id: UUID(),
+            date: Date(),
+            raw: text,
+            text: text,
+            duration: nil,
+            app: nil,
+            wasCommand: nil,
+            kind: "clipboard"
+        ))
+    }
+
+    private var dictations: [HistoryEntry] {
+        history.filter { !$0.keepsClipboard }
+    }
+
+    var totalWords: Int { dictations.reduce(0) { $0 + $1.words } }
 
     var todayCount: Int {
-        history.filter { Calendar.current.isDateInToday($0.date) }.count
+        dictations.filter { Calendar.current.isDateInToday($0.date) }.count
     }
 
     // Tippgeschwindigkeit von 40 Wörtern pro Minute als Vergleichsbasis.

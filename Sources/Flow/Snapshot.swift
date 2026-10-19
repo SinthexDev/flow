@@ -65,6 +65,21 @@ enum Snapshot {
             to: directory.appendingPathComponent("widget-translate.png")
         )
         state.widgetTranslateOpen = false
+        state.phase = .idle
+        state.widgetHovered = true
+        state.config.overlayResultSize = OverlayResultSize.regular.rawValue
+        state.overlayResult = OverlayResult(
+            command: "Kannst du mir das bitte zusammenfassen",
+            text: "Die Kosten steigen wegen der neuen Server schneller als der Umsatz, deshalb prüfen wir, welche Verträge wir kündigen."
+        )
+        let resultSize = OverlayResultSize.regular.panelSize
+        render(
+            OverlayView().environmentObject(state).background(Color(red: 0.910, green: 0.902, blue: 0.890)),
+            size: resultSize,
+            to: directory.appendingPathComponent("overlay-result.png")
+        )
+        state.overlayResult = nil
+        state.widgetHovered = false
 
         let phases: [(String, Phase)] = [
             ("listening", .listening),

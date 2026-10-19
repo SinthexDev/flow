@@ -1,6 +1,8 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
+import IOKit
 
 struct AppRelease: Equatable {
     var version: String
@@ -17,7 +19,8 @@ enum UpdateStatus: Equatable {
 }
 
 enum UpdateCheck {
-    static let feed = URL(string: "https://sinthex.de/flow/latest.json")!
+    /// Serves the same JSON as `latest.json`, and accepts `id` + `v` for Mac counting.
+    static let feed = URL(string: "https://sinthex.de/flow/latest.php")!
     static let page = URL(string: "https://sinthex.de/flow/")!
     private static let dismissedKey = "flow.dismissedUpdate"
 
@@ -44,7 +47,15 @@ enum UpdateCheck {
     }
 
     static func fetch() async throws -> AppRelease {
-        var request = URLRequest(url: feed)
+        var components = URLComponents(url: feed, resolvingAgainstBaseURL: false)!
+        var query = [URLQueryItem(name: "v", value: L10n.appVersion)]
+        if let id = anonymousId() {
+            query.insert(URLQueryItem(name: "id", value: id), at: 0)
+        }
+        components.queryItems = query
+        guard let url = components.url else { throw URLError(.badURL) }
+
+        var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 15
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -57,6 +68,26 @@ enum UpdateCheck {
             throw URLError(.cannotParseResponse)
         }
         return AppRelease(version: version, pkgURL: pkg)
+    }
+
+    /// SHA-256 of a salted hardware UUID. No computer name.
+    private static func anonymousId() -> String? {
+        guard let uuid = platformUUID() else { return nil }
+        let digest = SHA256.hash(data: Data("sinthex-flow\n\(uuid)".utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func platformUUID() -> String? {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        guard let raw = IORegistryEntryCreateCFProperty(
+            service,
+            "IOPlatformUUID" as CFString,
+            kCFAllocatorDefault,
+            0
+        ) else { return nil }
+        return raw.takeRetainedValue() as? String
     }
 
     static func download(_ release: AppRelease) async throws -> URL {
@@ -81,6 +112,7 @@ enum UpdateCheck {
     /// Expands the package, then a detached script replaces the running app and opens it again.
     /// The package file itself is never opened. A root-owned copy asks for the password once
     /// and is then given to the user, so the next update needs no prompt.
+    /// The update HUD is a separate process that shows after quit and exits when Flow relaunches.
     static func stageRelaunch(pkg: URL, version: String) throws {
         let work = FileManager.default.temporaryDirectory
             .appendingPathComponent("SinthexFlowUpdate-\(UUID().uuidString)", isDirectory: true)
@@ -99,16 +131,45 @@ enum UpdateCheck {
         guard ditto(source, to: staged) else { throw URLError(.cannotCreateFile) }
         let destination = Bundle.main.bundleURL.standardizedFileURL
         guard destination.pathExtension == "app" else { throw URLError(.cannotCreateFile) }
+        let owner = NSUserName()
+        let group = groupName()
+        // Prefer fixing ownership while the UI is still up, so a password (if needed) is not a surprise after quit.
+        ensureUserOwns(destination, owner: owner, group: group)
         let script = work.appendingPathComponent("relaunch.sh")
         let body = relaunchScript(
             staged: staged,
             destination: destination,
-            owner: NSUserName(),
-            group: groupName()
+            owner: owner,
+            group: group
         )
         try body.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         try spawnDetached([script.path, "\(ProcessInfo.processInfo.processIdentifier)"])
+    }
+
+    /// If the installed app is still root-owned from a package install, take ownership once.
+    private static func ensureUserOwns(_ destination: URL, owner: String, group: String) {
+        let probe = destination.appendingPathComponent(".flow-write-probe")
+        if FileManager.default.createFile(atPath: probe.path, contents: Data(), attributes: nil) {
+            try? FileManager.default.removeItem(at: probe)
+            return
+        }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = [
+            "-e",
+            "on run argv",
+            "-e",
+            "do shell script \"/usr/sbin/chown -R \" & quoted form of (item 2 of argv & \":\" & item 3 of argv) & \" \" & quoted form of item 1 of argv with administrator privileges",
+            "-e",
+            "end run",
+            "--",
+            destination.path,
+            owner,
+            group,
+        ]
+        try? task.run()
+        task.waitUntilExit()
     }
 
     private static func flowApp(in root: URL, version: String) -> URL? {
@@ -140,7 +201,12 @@ enum UpdateCheck {
         return copy.terminationStatus == 0 && FileManager.default.isExecutableFile(atPath: binary.path)
     }
 
-    private static func relaunchScript(staged: URL, destination: URL, owner: String, group: String) -> String {
+    private static func relaunchScript(
+        staged: URL,
+        destination: URL,
+        owner: String,
+        group: String
+    ) -> String {
         let stagedPath = shellQuote(staged.path)
         let destinationPath = shellQuote(destination.path)
         let ownerName = shellQuote(owner)
@@ -163,6 +229,7 @@ enum UpdateCheck {
         sleep 0.4
         if rm -rf "$dest" && /usr/bin/ditto "$src" "$dest"; then
           /usr/bin/xattr -cr "$dest" || true
+          /usr/sbin/chown -R "$owner:$group" "$dest" 2>/dev/null || true
           echo "replaced $dest"
         else
           echo "privileged replace $dest"
@@ -174,13 +241,21 @@ enum UpdateCheck {
             do shell script "rm -rf " & quoted form of destPath & " && /usr/bin/ditto " & quoted form of srcPath & " " & quoted form of destPath & " && /usr/sbin/chown -R " & quoted form of (ownerName & ":" & groupName) & " " & quoted form of destPath & " && /usr/bin/xattr -cr " & quoted form of destPath with administrator privileges
           end run' -- "$dest" "$src" "$owner" "$group"
         fi
-        /usr/bin/open "$dest"
+        # -n: new instance. The update HUD already holds de.sinthex.flow, so plain
+        # `open` would only activate the HUD and never start Flow again.
+        /usr/bin/open -n "$dest"
         echo "update finished"
         """
     }
 
     /// Runs `/bin/bash` with these arguments in its own session, so it outlives the app.
     static func spawnDetached(_ arguments: [String]) throws {
+        _ = try spawnDetachedExecutable("/bin/bash", arguments: arguments)
+    }
+
+    /// Runs any executable in its own session and returns the child pid.
+    @discardableResult
+    static func spawnDetachedExecutable(_ executable: String, arguments: [String]) throws -> pid_t {
         var attr: posix_spawnattr_t?
         guard posix_spawnattr_init(&attr) == 0 else { throw URLError(.cannotOpenFile) }
         defer { posix_spawnattr_destroy(&attr) }
@@ -193,13 +268,14 @@ enum UpdateCheck {
         posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0)
         posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
-        let argvPointers = ["/bin/bash"] + arguments
+        let argvPointers = [executable] + arguments
         var cArgs = argvPointers.map { strdup($0) }
         cArgs.append(nil)
         defer { cArgs.forEach { free($0) } }
         var child: pid_t = 0
-        let result = posix_spawn(&child, "/bin/bash", &actions, &attr, &cArgs, environ)
+        let result = posix_spawn(&child, executable, &actions, &attr, &cArgs, environ)
         guard result == 0 else { throw URLError(.cannotOpenFile) }
+        return child
     }
 
     private static func groupName() -> String {

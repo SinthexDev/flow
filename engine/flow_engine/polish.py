@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from flow_engine.transcribe import normalize_dictation_text
+
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 SPECIAL_RE = re.compile(r"<\|[^|]*\|>")
 
@@ -44,6 +46,7 @@ LANG_NAMES = {
     "pl": "Polnisch",
     "tr": "Türkisch",
 }
+
 
 # Kurze Funktionswörter. Eine Ersetzung davon trifft fast jeden Satz.
 _STOPWORDS = frozenset({
@@ -264,11 +267,8 @@ def clean_output(text: str) -> str:
     fence = re.match(r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$", text)
     if fence:
         text = fence.group(1).strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
-        inner = text[1:-1].strip()
-        if inner and "\n\n" not in text:
-            text = inner
-    return text.strip()
+    # Same quote/period cleanup as Whisper output – polish often re-adds them.
+    return normalize_dictation_text(text)
 
 
 def token_budget(raw: str, selection: str | None) -> int:
@@ -288,9 +288,12 @@ def build_messages(
     instructions: str,
     dictionary: str,
     target_language: str | None = None,
+    note_answer: bool = False,
 ) -> list[dict[str, str]]:
     if target_language:
         return build_translate_messages(raw if not selection else selection, target_language)
+    if note_answer and selection and selection.strip():
+        return build_note_answer_messages(raw, selection, dictionary)
     if selection and selection.strip():
         return build_command_messages(raw, selection, style, instructions, dictionary)
 
@@ -302,11 +305,14 @@ def build_messages(
         "- Gib nur den fertigen Text zurück.",
         "- Keine Erklärung, keine Anführungszeichen um die ganze Antwort, kein Markdown, außer der Text selbst Markdown sein soll.",
         "- Entferne Füllwörter wie äh, ähm, also, halt, quasi, sozusagen, um, uh.",
-        "- Setze Zeichensetzung, Großschreibung und Absätze.",
+        "- Setze Zeichensetzung, Großschreibung und Absätze nur, wenn der Gesamtkontext sie braucht.",
+        "- Keine Anführungszeichen um einzelne Wörter oder kurze Phrasen. Anführungszeichen nur bei klarer wörtlicher Rede oder einem ausdrücklich zitierten Ausdruck.",
+        "- Ein einzelnes Wort oder eine sehr kurze Phrase bekommt keinen abschließenden Punkt, außer er steht schon im Rohtranskript oder wurde ausdrücklich gesprochen.",
         "- Korrigiere Versprecher, ohne Inhalt, Namen oder Zahlen zu erfinden.",
         "- Behalte die Sprache des Gesprochenen.",
         "- Gesprochene Hinweise wie Absatz, neuer Absatz oder Zeilenumbruch werden zu einer neuen Zeile.",
         "- Gesprochene Satzzeichen wie Komma, Punkt, Fragezeichen, Ausrufezeichen und Doppelpunkt setzt du als Zeichen, wenn sie als Satzzeichen gemeint sind.",
+        "- Erfinde keine Schlussfloskeln wie „Vielen Dank“, „Danke“ oder Grüße, die nicht im Rohtranskript stehen.",
         f"- Stil: {style_text}",
     ]
     lines.extend(glossary_lines(dictionary, raw))
@@ -351,6 +357,29 @@ def build_command_messages(
     if extra:
         lines.append("Zusätzliche Anweisung des Nutzers: " + extra)
     user = f"Markierter Text:\n{selection.strip()}\n\nAnweisung:\n{raw.strip()}"
+    return [
+        {"role": "system", "content": "\n".join(lines)},
+        {"role": "user", "content": user},
+    ]
+
+
+def build_note_answer_messages(
+    raw: str,
+    selection: str,
+    dictionary: str = "",
+) -> list[dict[str, str]]:
+    lines = [
+        "Du schreibst eine Notiz.",
+        "Die Markierung ist nur der Kontext. Die Anweisung sagt, was in die Notiz gehört.",
+        "Regeln:",
+        "- Gib nur den Notiztext zurück.",
+        "- Übernimm die Markierung nicht, außer die Anweisung verlangt ausdrücklich, sie zu speichern oder zu kopieren.",
+        "- Beantworte die Anweisung anhand der Markierung.",
+        "- Keine Erklärung, kein Vorwort, keine Anführungszeichen um die ganze Antwort.",
+        "- Behalte die Sprache der Anweisung.",
+    ]
+    lines.extend(glossary_lines(dictionary, f"{selection}\n{raw}"))
+    user = f"Kontext:\n{selection.strip()}\n\nAnweisung:\n{raw.strip()}"
     return [
         {"role": "system", "content": "\n".join(lines)},
         {"role": "user", "content": user},

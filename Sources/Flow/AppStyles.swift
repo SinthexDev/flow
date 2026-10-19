@@ -40,6 +40,7 @@ struct AppStyleProfile: Codable, Equatable, Identifiable {
 
 enum AppStyleCatalog {
     static func suggest(bundleID: String, name: String) -> String {
+        if isCursor(bundleID, name) { return "auto" }
         let id = bundleID.lowercased()
         let title = name.lowercased()
         if matches(id, title, bundles: codeBundles, names: codeNames) { return "code" }
@@ -112,6 +113,13 @@ enum AppStyleCatalog {
         let fallback = url.deletingPathExtension().lastPathComponent
         let raw = (display?.isEmpty == false ? display : nil) ?? (bundleName?.isEmpty == false ? bundleName : nil) ?? fallback
         return FrontApp(bundleID: id, name: raw)
+    }
+
+    private static func isCursor(_ bundleID: String, _ name: String) -> Bool {
+        let id = bundleID.lowercased()
+        let title = name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        if title == "cursor" { return true }
+        return id == "com.todesktop.230313mzl4w4u92" || id.hasPrefix("com.cursor.")
     }
 
     private static func matches(_ id: String, _ name: String, bundles: [String], names: [String]) -> Bool {

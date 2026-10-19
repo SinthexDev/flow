@@ -75,13 +75,14 @@ struct HistoryView: View {
 
 struct SearchField: View {
     @Binding var text: String
+    var placeholder: String = L10n.s("history.search")
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-            TextField(L10n.s("history.search"), text: $text)
+            TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
             if !text.isEmpty {
