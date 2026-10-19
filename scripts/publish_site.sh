@@ -1,6 +1,7 @@
 #!/bin/bash
-# Uploads ../flow-site/ and dist/Sinthex-Flow-<version>.pkg to https://sinthex.de/flow/
-# Older Flow-*.pkg and Sinthex-Flow-*.pkg files on the server stay in place.
+# Uploads ../flow-site/ and the installer. Host and public base URL are the two
+# variables below. Forks change those; the app reads its feed from UpdateCheck.feed.
+# Older installer packages on the server stay in place.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,13 +11,13 @@ PKG="$ROOT/dist/Sinthex-Flow-$VERSION.pkg"
 REMOTE="sinthex:hosting/sinthex.de/flow"
 BASE="https://sinthex.de/flow"
 
-python3 - "$ROOT" "$SITE" "$VERSION" <<'PY'
+python3 - "$ROOT" "$SITE" "$VERSION" "$BASE" <<'PY'
 import json, pathlib, sys
-root, site, version = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+root, site, version, base = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4].rstrip("/")
 latest = json.loads((site / "latest.json").read_text())
 if latest.get("version") != version:
     sys.exit(f"latest.json ist {latest.get('version')}, Info.plist ist {version}")
-expected = f"https://sinthex.de/flow/Sinthex-Flow-{version}.pkg"
+expected = f"{base}/Sinthex-Flow-{version}.pkg"
 if latest.get("pkg") != expected:
     sys.exit(f"latest.json pkg ist {latest.get('pkg')}, erwartet {expected}")
 en = json.loads((root / "Languages" / "en.json").read_text())

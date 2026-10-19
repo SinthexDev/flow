@@ -4,7 +4,9 @@ description: Sinthex-Flow-Version veröffentlichen — ChangeLog, Webseite, Spra
 
 # deployVersion
 
-Veröffentliche die Sinthex-Flow-Version, die in `packaging/Info.plist` steht, auf https://sinthex.de/flow/. Download und Auto-Updater lesen dieselbe Fassung: die Seite verlinkt `Sinthex-Flow-<version>.pkg`, `../flow-site/latest.json` zeigt auf die absolute Paket-URL.
+Veröffentliche die Version, die in `packaging/Info.plist` steht, auf die Produktseite neben diesem Repo (`../flow-site`). Download und Auto-Updater lesen dieselbe Fassung: die Seite verlinkt `Sinthex-Flow-<version>.pkg`, `../flow-site/latest.json` zeigt auf die absolute Paket-URL.
+
+Host und Basisadresse stehen in `scripts/publish_site.sh` als `REMOTE` und `BASE`. Die App liest ihre Update-Adresse aus `UpdateCheck.feed`. Diese beiden Stellen nicht aus dieser Anleitung abschreiben.
 
 Nicht committen und nicht pushen, außer der Nutzer hat das in derselben Anfrage verlangt.
 
@@ -13,7 +15,7 @@ Arbeite die Schritte in dieser Reihenfolge ab. Einen Schritt, der schon stimmt, 
 ## 1. Version festlegen
 
 - Lokal: `CFBundleShortVersionString` und `CFBundleVersion` in `packaging/Info.plist`.
-- Live: `curl -fsS https://sinthex.de/flow/latest.json`.
+- Live: `BASE` aus `scripts/publish_site.sh`, dann `curl -fsS "$BASE/latest.json"`.
 - Vergleiche wie `UpdateCheck.isNewer`: numerisch je Komponente.
 
 Ist die lokale Version neuer als die live Version, diese lokale Version veröffentlichen. Nicht noch einmal anheben.
@@ -58,7 +60,7 @@ Mindestens:
 - `../flow-site/befehle.html`, `korrektur.html`, `privatsphaere.html`, `changelog.html`, `impressum.html`: Download-Link im Kopf
 - `../flow-site/i18n.js`: `start.pkgBody`, `start.pkgBtn`, `faq.a6`
 - `../flow-site/index.md`, `../flow-site/changelog.md`, `../flow-site/llms.txt`: aktuelle Version und Paket-URL
-- `../flow-site/latest.json`: `version` und `pkg` als `https://sinthex.de/flow/Sinthex-Flow-<version>.pkg`
+- `../flow-site/latest.json`: `version` und `pkg` als `$BASE/Sinthex-Flow-<version>.pkg`, mit dem `BASE` aus `scripts/publish_site.sh`
 - `../flow-site/sitemap.xml`: `lastmod` der geänderten URLs
 
 Wenn `../flow-site/i18n.js` sich ändert, `i18n.js?v=` in jeder `../flow-site/*.html` um 1 erhöhen. Überall dieselbe Zahl. Für `styles.css?v=` und `script.js?v=` gilt dasselbe.
@@ -118,15 +120,15 @@ Sprachdateien und Screenshots sind vorher fertig. Dann:
 ./scripts/publish_site.sh
 ```
 
-`publish_site.sh` lädt `../flow-site/` nach `sinthex:hosting/sinthex.de/flow/` und dazu `dist/Sinthex-Flow-<version>.pkg`. Ältere Pakete auf dem Server bleiben. Das Skript bricht ab, wenn `latest.json`, die Sprachschlüssel oder die Paketgröße nicht zur Version passen.
+`publish_site.sh` lädt `../flow-site/` nach `REMOTE` und dazu `dist/Sinthex-Flow-<version>.pkg`. Ältere Pakete auf dem Server bleiben. Das Skript bricht ab, wenn `latest.json`, die Sprachschlüssel oder die Paketgröße nicht zur Version passen.
 
 ## 7. Prüfen
 
-Das Skript prüft Feed, Paketgröße und den Download-Link auf der Startseite. Zusätzlich die live Seite im Browser öffnen und durchklicken:
+Das Skript prüft Feed, Paketgröße und den Download-Link auf der Startseite. Zusätzlich die live Seite im Browser öffnen und durchklicken. Die Adresse ist `BASE` aus `scripts/publish_site.sh`:
 
-- https://sinthex.de/flow/ — Hero-Link lädt `Sinthex-Flow-<version>.pkg`
-- https://sinthex.de/flow/download.html — Installer-Links laden dasselbe Paket, der ChangeLog-Auszug zeigt die neue Version
-- https://sinthex.de/flow/changelog.html zeigt denselben Eintrag
-- https://sinthex.de/flow/latest.json hat `version` und die absolute `pkg`-URL
+- `$BASE/` — Hero-Link lädt `Sinthex-Flow-<version>.pkg`
+- `$BASE/download.html` — Installer-Links laden dasselbe Paket, der ChangeLog-Auszug zeigt die neue Version
+- `$BASE/changelog.html` zeigt denselben Eintrag
+- `$BASE/latest.json` hat `version` und die absolute `pkg`-URL
 
 Danach kurz sagen: Version, ob Screenshots neu sind, und dass Download und Auto-Updater auf dieses Paket zeigen.
