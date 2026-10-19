@@ -16,7 +16,7 @@ enum OpenAIKeyStore {
     private static let openaiAccount = "openai-api-key"
     private static let claudeAccount = "claude-api-key"
     private static let cursorAccount = "cursor-api-key"
-    private static let label = "Sinthex Flow OpenAI"
+    private static var label: String { "\(L10n.appName) OpenAI" }
     private static let migratedDefaultsKey = "flow.keychain.dp.v2"
     private static var touchedAccounts = Set<String>()
 

@@ -1,6 +1,6 @@
 # Hinweise zu fremden Lizenzen
 
-Flow ist ein eigenständiges Programm von **Sinthex**. Es nutzt die folgenden Open-Source-Projekte als Basis. Deren Lizenzen bleiben unberührt. Die Lizenz von Flow selbst steht in [LICENSE](LICENSE) (MIT, Copyright (c) 2026 Sinthex).
+Flow ist ein eigenständiges Programm. Es nutzt die folgenden Open-Source-Projekte als Basis. Deren Lizenzen bleiben unberührt. Die Lizenz von Flow selbst steht in [LICENSE](LICENSE) (MIT, Copyright (c) 2026 Sinthex).
 
 ## Direkt verwendet
 

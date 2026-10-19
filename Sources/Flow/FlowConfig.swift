@@ -474,7 +474,7 @@ struct FlowConfig: Codable, Equatable {
         config.openAIModel = "auto"
         config.didChooseModel = true
         config.onboarded = true
-        config.dictionary = "sintex flow -> Sinthex Flow\nbeexperts -> beeXperts"
+        config.dictionary = "acme -> Acme"
         config.correctionFallback = true
         config.correctionEndpoints = [
             CorrectionEndpoint.chatgpt(model: "auto"),

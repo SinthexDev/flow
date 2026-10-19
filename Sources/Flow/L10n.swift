@@ -9,14 +9,27 @@ enum L10n {
     static var locale: Locale { loaded.locale }
 
     static func s(_ key: String) -> String {
-        loaded.active[key] ?? loaded.english[key] ?? key
+        apply(loaded.active[key] ?? loaded.english[key] ?? key)
     }
 
     static func s(_ key: String, _ args: CVarArg...) -> String {
         String(format: s(key), locale: locale, arguments: args)
     }
 
-    static let appName = "Sinthex Flow"
+    /// Name aus dem Bundle. Ein Fork ändert die Anzeige, die Texte folgen.
+    static var appName: String {
+        let info = Bundle.main.infoDictionary
+        for key in ["CFBundleDisplayName", "CFBundleName"] {
+            guard let raw = info?[key] as? String else { continue }
+            let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        return "Flow"
+    }
+
+    private static func apply(_ text: String) -> String {
+        text.replacingOccurrences(of: "{app}", with: appName)
+    }
 
     static var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""

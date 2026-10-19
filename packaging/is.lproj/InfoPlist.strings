@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
-"NSMicrophoneUsageDescription" = "Sinthex Flow notar hljóðnemann til að þekkja innlestur staðbundið á þessari Mac.";
-"NSAppleEventsUsageDescription" = "Sinthex Flow setur lesinn texta inn í virka forritið og getur vistað glósur í Glósur.";
+"NSMicrophoneUsageDescription" = "Flow notar hljóðnemann til að þekkja innlestur staðbundið á þessari Mac.";
+"NSAppleEventsUsageDescription" = "Flow setur lesinn texta inn í virka forritið og getur vistað glósur í Glósur.";

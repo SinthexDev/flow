@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
-"NSMicrophoneUsageDescription" = "Sinthex Flow выкарыстоўвае мікрафон, каб распазнаваць дыктоўку лакальна на гэтым Mac.";
-"NSAppleEventsUsageDescription" = "Sinthex Flow устаўляе прадыктаваны тэкст у актыўную праграму і можа захоўваць нататкі ў праграме «Нататкі».";
+"NSMicrophoneUsageDescription" = "Flow выкарыстоўвае мікрафон, каб распазнаваць дыктоўку лакальна на гэтым Mac.";
+"NSAppleEventsUsageDescription" = "Flow устаўляе прадыктаваны тэкст у актыўную праграму і можа захоўваць нататкі ў праграме «Нататкі».";

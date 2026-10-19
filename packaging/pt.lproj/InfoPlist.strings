@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
-"NSMicrophoneUsageDescription" = "Sinthex Flow usa o microfone para reconhecer o ditado localmente neste Mac.";
-"NSAppleEventsUsageDescription" = "O Sinthex Flow insere o texto ditado na app ativa e pode guardar notas na app Notas.";
+"NSMicrophoneUsageDescription" = "Flow usa o microfone para reconhecer o ditado localmente neste Mac.";
+"NSAppleEventsUsageDescription" = "O Flow insere o texto ditado na app ativa e pode guardar notas na app Notas.";

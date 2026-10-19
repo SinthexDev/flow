@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
-"NSMicrophoneUsageDescription" = "Sinthex Flow kasutab mikrofoni, et dikteeringut selles Macis kohapeal ära tunda.";
-"NSAppleEventsUsageDescription" = "Sinthex Flow lisab dikteeritud teksti aktiivsesse rakendusse ja saab salvestada märkmeid Märkmete rakendusse.";
+"NSMicrophoneUsageDescription" = "Flow kasutab mikrofoni, et dikteeringut selles Macis kohapeal ära tunda.";
+"NSAppleEventsUsageDescription" = "Flow lisab dikteeritud teksti aktiivsesse rakendusse ja saab salvestada märkmeid Märkmete rakendusse.";

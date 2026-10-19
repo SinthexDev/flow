@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
-"NSMicrophoneUsageDescription" = "Mae Sinthex Flow yn defnyddio’r meicroffon i adnabod arddywediad yn lleol ar y Mac hwn.";
-"NSAppleEventsUsageDescription" = "Mae Sinthex Flow yn mewnosod testun wedi'i arddweud yn yr ap gweithredol a gall gadw nodiadau yn ap Nodiadau.";
+"NSMicrophoneUsageDescription" = "Mae Flow yn defnyddio’r meicroffon i adnabod arddywediad yn lleol ar y Mac hwn.";
+"NSAppleEventsUsageDescription" = "Mae Flow yn mewnosod testun wedi'i arddweud yn yr ap gweithredol a gall gadw nodiadau yn ap Nodiadau.";

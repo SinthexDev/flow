@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
-"NSMicrophoneUsageDescription" = "Sinthex Flow juża l-mikrofonu biex jagħraf id-dettatura lokalment fuq dan il-Mac.";
-"NSAppleEventsUsageDescription" = "Sinthex Flow idaħħal it-test iddettat fl-app attiva u jista' jsalva noti fl-app Noti.";
+"NSMicrophoneUsageDescription" = "Flow juża l-mikrofonu biex jagħraf id-dettatura lokalment fuq dan il-Mac.";
+"NSAppleEventsUsageDescription" = "Flow idaħħal it-test iddettat fl-app attiva u jista' jsalva noti fl-app Noti.";

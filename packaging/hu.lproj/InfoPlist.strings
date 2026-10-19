@@ -1,4 +1,4 @@
 "CFBundleDisplayName" = "Sinthex Flow";
 "CFBundleName" = "Sinthex Flow";
-"NSMicrophoneUsageDescription" = "A Sinthex Flow a mikrofont használja, hogy a diktálást helyben, ezen a Mac-en ismerje fel.";
-"NSAppleEventsUsageDescription" = "A Sinthex Flow a diktált szöveget az aktív appba illeszti, és jegyzeteket menthet a Jegyzetek appba.";
+"NSMicrophoneUsageDescription" = "A Flow a mikrofont használja, hogy a diktálást helyben, ezen a Mac-en ismerje fel.";
+"NSAppleEventsUsageDescription" = "A Flow a diktált szöveget az aktív appba illeszti, és jegyzeteket menthet a Jegyzetek appba.";
