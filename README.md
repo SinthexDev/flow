@@ -49,6 +49,8 @@ Sinthex Flow builds on other open-source projects, chiefly mlx-whisper, MLX, mlx
 
 API keys, certificates, PKCS#12 files, and dictations do not belong in this repository. The OpenAI key stays in the macOS Keychain (`de.sinthex.flow` / `openai-api-key`). Configuration and history stay on the Mac under `~/Library/Application Support/Sinthex Flow/` and are excluded from Git.
 
+The update check sends two values to the update address: the installed version and a SHA-256 hash of the salted hardware UUID. That hash counts Macs. It carries no computer name, no user name, and no dictated text. The code is in `Sources/Flow/UpdateCheck.swift`.
+
 ## Build
 
 Requirements: macOS 14, Apple Silicon, Xcode command-line tools, [uv](https://docs.astral.sh/uv/), and Python 3.12.
