@@ -6,18 +6,18 @@ The name shown in the app comes from `CFBundleDisplayName`. The interface text f
 
 **Author: Sinthex**
 
-**Version 1.25.1** · [Changelog](https://sinthex.de/flow/changelog.html?lang=en) · [changelog.md](https://sinthex.de/flow/changelog.md)
+**Version 1.25.2** · [Changelog](https://sinthex.de/flow/changelog.html?lang=en) · [changelog.md](https://sinthex.de/flow/changelog.md)
 
 Project page: <https://sinthex.de/flow/>  
-Installer: <https://sinthex.de/flow/Sinthex-Flow-1.25.1.pkg>  
+Installer: <https://sinthex.de/flow/Sinthex-Flow-1.25.2.pkg>  
 Source: <https://github.com/SinthexDev/flow>
 
 ![Home](docs/screenshots/main-home.png)
 
-## 1.25.1 — 13 October 2026
+## 1.25.2 — October 20, 2026
 
-- **Bugfix** — The dictionary no longer rewrites capitalization-only changes or short words such as “das” and “mein”. Those entries were changing ordinary text.
-- **Improvement** — Names and explicit replacements weigh more in recognition and correction. Close spellings are aligned to the dictionary entry.
+- **Improvement** — Interface text follows the display name from the app bundle.
+- **Other** — The source code is on GitHub under SinthexDev/flow.
 
 The full history is on the [changelog](https://sinthex.de/flow/changelog.html?lang=en).
 
