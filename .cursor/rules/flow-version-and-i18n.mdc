@@ -8,7 +8,7 @@ alwaysApply: true
 Product version is `CFBundleShortVersionString` in `packaging/Info.plist`.
 `CFBundleVersion` is an integer. Increment it by 1 on every version bump.
 
-The product page lives in the private repo `beeXperts-Niko/flow-site`, checked out beside this repo as `../flow-site`.
+The product page lives in the private repo `SinthexDev/flow-site`, checked out beside this repo as `../flow-site`.
 
 On every user-visible change, before finishing:
 - bump the version

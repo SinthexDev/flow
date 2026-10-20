@@ -10,7 +10,7 @@ The name shown in the app comes from `CFBundleDisplayName`. The interface text f
 
 Project page: <https://sinthex.de/flow/>  
 Installer: <https://sinthex.de/flow/Sinthex-Flow-1.25.1.pkg>  
-Source: <https://github.com/beeXperts-Niko/flow>
+Source: <https://github.com/SinthexDev/flow>
 
 ![Home](docs/screenshots/main-home.png)
 
