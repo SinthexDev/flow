@@ -317,35 +317,61 @@ struct MenuBarView: View {
     }
 
     private var footer: some View {
-        VStack(spacing: 7) {
-            HStack(spacing: 4) {
-                Button {
-                    state.openMain(.home)
-                } label: {
-                    Label(L10n.s("menu.open"), systemImage: "macwindow")
-                        .font(.system(size: 12, weight: .medium))
+        VStack(spacing: 8) {
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8)
+                ],
+                spacing: 6
+            ) {
+                ForEach(MainSection.allCases) { section in
+                    MenuDestinationButton(title: section.title, icon: section.icon) {
+                        state.openMain(section)
+                    }
                 }
-                .buttonStyle(SoftButtonStyle())
-                Spacer()
-                Button {
-                    state.openMain(.settings)
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .buttonStyle(IconButtonStyle())
-                .help(L10n.s("menu.settings"))
-                Button {
+                MenuDestinationButton(title: L10n.s("menu.quitShort"), icon: "power", tint: .secondary) {
                     NSApp.terminate(nil)
-                } label: {
-                    Image(systemName: "power")
                 }
-                .buttonStyle(IconButtonStyle())
-                .help(L10n.s("menu.quit"))
             }
             Text(L10n.appVersion)
                 .font(.system(size: 10, weight: .medium).monospacedDigit())
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity)
         }
+    }
+}
+
+private struct MenuDestinationButton: View {
+    let title: String
+    let icon: String
+    var tint: Color = Theme.violet
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 16)
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(hovering ? 0.1 : 0.05))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }

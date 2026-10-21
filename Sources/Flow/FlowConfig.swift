@@ -109,6 +109,8 @@ struct FlowConfig: Codable, Equatable {
     var autoCorrect: Bool
     var hotkey: String
     var playSounds: Bool
+    /// Leer = Systemstandard. Sonst die UID des Mikrofons.
+    var inputDeviceUID: String = ""
     /// Während der Aufnahme: off, quiet oder mute.
     var othersAudio: String
     /// Kurze Korrekturen am eingesetzten Text ins Wörterbuch übernehmen.
@@ -297,6 +299,7 @@ struct FlowConfig: Codable, Equatable {
         autoCorrect = try c.decodeIfPresent(Bool.self, forKey: .autoCorrect) ?? d.autoCorrect
         hotkey = try c.decodeIfPresent(String.self, forKey: .hotkey) ?? d.hotkey
         playSounds = try c.decodeIfPresent(Bool.self, forKey: .playSounds) ?? d.playSounds
+        inputDeviceUID = try c.decodeIfPresent(String.self, forKey: .inputDeviceUID) ?? ""
         if let stored = try c.decodeIfPresent(String.self, forKey: .othersAudio),
            OthersAudio(rawValue: stored) != nil {
             othersAudio = stored
@@ -400,6 +403,7 @@ struct FlowConfig: Codable, Equatable {
         try c.encode(autoCorrect, forKey: .autoCorrect)
         try c.encode(hotkey, forKey: .hotkey)
         try c.encode(playSounds, forKey: .playSounds)
+        try c.encode(inputDeviceUID, forKey: .inputDeviceUID)
         try c.encode(othersAudio, forKey: .othersAudio)
         try c.encode(othersAudio != OthersAudio.off.rawValue, forKey: .muteOthers)
         try c.encode(learnEdits, forKey: .learnEdits)
@@ -425,7 +429,7 @@ struct FlowConfig: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case modelPath, whisperModel, asrEngine, asrQuality, polishProvider, openAIModel, correctionBaseURL, correctionKind, correctionFallback, correctionEndpoints, didChooseModel, appStyles, language, nativeLanguage, style, instructions, dictionary
-        case commandMode, autoCorrect, hotkey, playSounds, muteOthers, othersAudio, learnEdits, launchAtLogin, onboarded, port, widgetX, widgetY, widgetDisplayID, widgetFollowActiveScreen, showWidget, widgetAlwaysVisible, overlayResultSize, overlayResultDismissSeconds, historyKeepHours, historyKeepDays, historyMaxEntries, showDictationPreview, dictationPreviewDismissSeconds, resultPlacementFixed, resultPlacementScreen, resultPlacementAnchor, noteDestination
+        case commandMode, autoCorrect, hotkey, playSounds, inputDeviceUID, muteOthers, othersAudio, learnEdits, launchAtLogin, onboarded, port, widgetX, widgetY, widgetDisplayID, widgetFollowActiveScreen, showWidget, widgetAlwaysVisible, overlayResultSize, overlayResultDismissSeconds, historyKeepHours, historyKeepDays, historyMaxEntries, showDictationPreview, dictationPreviewDismissSeconds, resultPlacementFixed, resultPlacementScreen, resultPlacementAnchor, noteDestination
     }
 
     var usesWhistle: Bool { asrEngine == "whistle" }

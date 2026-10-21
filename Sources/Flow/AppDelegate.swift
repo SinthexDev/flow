@@ -405,9 +405,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         inserter.rememberInsertTarget()
         engine.prewarm(port: state.config.port)
         do {
-            try recorder.start()
+            try recorder.start(inputUID: state.config.inputDeviceUID)
         } catch {
             show(.failed(error.localizedDescription), resetAfter: 2.5)
+            return
+        }
+        // Die Taste kann schon oben sein, während das Mikrofon (etwa AirPods) noch aufgeht.
+        if !handsFree, !hotkeys.isHolding {
+            _ = recorder.stop()
             return
         }
         startSelectionCapture()

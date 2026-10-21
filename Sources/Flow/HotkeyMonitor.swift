@@ -66,6 +66,7 @@ final class HotkeyMonitor {
     var onHoldEnd: (() -> Void)?
     var onToggle: (() -> Void)?
     var onEscape: (() -> Void)?
+    var isHolding: Bool { holdActive }
 
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?

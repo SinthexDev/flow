@@ -7,6 +7,7 @@ struct SettingsView: View {
     /// Drafts keyed by Keychain account (provider kind or custom UUID), not endpoint id.
     @State private var keyDrafts: [String: String] = [:]
     @State private var showAdvanced = false
+    @State private var microphones: [AudioInputs.Device] = []
 
     var body: some View {
         Page(title: L10n.s("settings.title"), subtitle: L10n.s("settings.subtitle")) {
@@ -56,6 +57,25 @@ struct SettingsView: View {
             }
 
             SettingsSection(title: L10n.s("settings.recording.section"), icon: "waveform") {
+                SettingRow(
+                    title: L10n.s("settings.mic.input.title"),
+                    detail: L10n.s("settings.mic.input.detail")
+                ) {
+                    Picker("", selection: microphoneSelection) {
+                        Text(systemMicrophoneTitle).tag(AudioInputs.systemDefault)
+                        if !state.config.inputDeviceUID.isEmpty,
+                           !microphones.contains(where: { $0.id == state.config.inputDeviceUID }) {
+                            Text(L10n.s("settings.mic.input.missing")).tag(state.config.inputDeviceUID)
+                        }
+                        ForEach(microphones) { device in
+                            Text(device.name).tag(device.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                Divider()
                 SettingRow(
                     title: L10n.s("settings.correction.title"),
                     detail: correctionDetail
@@ -369,6 +389,8 @@ struct SettingsView: View {
             .padding(.top, 4)
         }
         .onAppear {
+            AudioInputs.startWatching()
+            microphones = AudioInputs.devices()
             loadKeys()
             if let first = state.config.activeCorrectionEndpoints.first {
                 lookup(first)
@@ -384,6 +406,23 @@ struct SettingsView: View {
         .onChange(of: state.config.correctionFallback) { _, _ in
             refreshPolishAvailable()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .flowMicrophonesChanged)) { _ in
+            microphones = AudioInputs.devices()
+        }
+    }
+
+    private var systemMicrophoneTitle: String {
+        guard let name = AudioInputs.systemDefaultName() else {
+            return L10n.s("settings.mic.input.system")
+        }
+        return L10n.s("settings.mic.input.systemNamed", name)
+    }
+
+    private var microphoneSelection: Binding<String> {
+        Binding(
+            get: { state.config.inputDeviceUID },
+            set: { state.config.inputDeviceUID = $0 }
+        )
     }
 
     private var updateDetail: String {

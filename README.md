@@ -6,18 +6,17 @@ The name shown in the app comes from `CFBundleDisplayName`. The interface text f
 
 **Author: Sinthex**
 
-**Version 1.25.2** · [Changelog](https://sinthex.de/flow/changelog.html?lang=en) · [changelog.md](https://sinthex.de/flow/changelog.md)
+**Version 1.26.1** · [Changelog](https://sinthex.de/flow/changelog.html?lang=en) · [changelog.md](https://sinthex.de/flow/changelog.md)
 
 Project page: <https://sinthex.de/flow/>  
-Installer: <https://sinthex.de/flow/Sinthex-Flow-1.25.2.pkg>  
+Installer: <https://sinthex.de/flow/Sinthex-Flow-1.26.1.pkg>  
 Source: <https://github.com/SinthexDev/flow>
 
 ![Home](docs/screenshots/main-home.png)
 
-## 1.25.2 — October 20, 2026
+## 1.26.1 — October 21, 2026
 
-- **Improvement** — Interface text follows the display name from the app bundle.
-- **Other** — The source code is on GitHub under SinthexDev/flow.
+- **Bugfix** — The focus ring no longer stays on Home in the sidebar.
 
 The full history is on the [changelog](https://sinthex.de/flow/changelog.html?lang=en).
 
