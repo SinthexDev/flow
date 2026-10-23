@@ -33,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var frontObserver: NSObjectProtocol?
     /// Rohdaten für die Auswahl Befehl vs. Umformulierung.
     private var pendingChoiceMeta: (raw: String, duration: TimeInterval, app: String?)?
+    /// Experimenteller Flow Stream. nil = normales Batch-Diktat.
+    private var liveSession: LiveDictation?
+    /// false sobald Stop oder Abbruch begann, damit kein Live-Start mehr in den Batch-Pfad läuft.
+    private var acceptingLive = false
 
     private func clearDictationPreview() {
         state.dictationPreview = nil
@@ -398,6 +402,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         job?.cancel()
         selectionTask?.cancel()
         selectionTask = nil
+        liveSession?.cancel()
+        liveSession = nil
+        acceptingLive = false
+        state.liveStreamActive = false
+        state.liveStream.reset()
         state.rewriting = false
         dictationGeneration += 1
         dictationApp = FrontApp.current()
@@ -434,6 +443,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self, self.state.phase == .listening else { return }
             self.state.elapsed = Date().timeIntervalSince(self.listenStarted)
         }
+        acceptingLive = true
+        startLiveIfNeeded()
+    }
+
+    private func startLiveIfNeeded() {
+        guard state.config.liveDictation else { return }
+        let generation = dictationGeneration
+        let preview = state.config.liveDictationPreview
+        if state.config.commandMode {
+            let capture = selectionTask
+            Task { @MainActor in
+                let selection = await capture?.value
+                guard generation == self.dictationGeneration else { return }
+                guard self.acceptingLive, self.state.phase == .listening else { return }
+                let marked = selection?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard marked.isEmpty else { return }
+                self.startLive(preview: preview, generation: generation)
+            }
+        } else {
+            startLive(preview: preview, generation: generation)
+        }
+    }
+
+    private func startLive(preview: Bool, generation: Int) {
+        guard acceptingLive, liveSession == nil, state.phase == .listening else { return }
+        if preview { state.liveStream.reset() }
+        let session = LiveDictation(
+            recorder: recorder,
+            engine: engine,
+            inserter: inserter,
+            stream: preview ? state.liveStream : nil,
+            configProvider: { [weak self] in
+                guard let self else { return .standard }
+                var config = self.state.config
+                if let front = FrontApp.current() ?? self.dictationApp {
+                    config.style = self.state.effectiveStyle(for: front)
+                }
+                if !self.engine.polishAvailable { config.autoCorrect = false }
+                return config
+            },
+            isCurrent: { [weak self] in
+                guard let self else { return false }
+                return self.dictationGeneration == generation && self.liveSession != nil
+            }
+        )
+        session.onCard = { [weak self] in
+            guard let self, self.dictationGeneration == generation else { return }
+            self.state.liveStreamActive = true
+        }
+        liveSession = session
+        session.start()
     }
 
     private func startSelectionCapture() {
@@ -460,14 +520,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func cancel() {
         switch state.phase {
         case .listening:
+            acceptingLive = false
             releaseSilence()
             selectionTask?.cancel()
             selectionTask = nil
+            let liveOutcome = liveSession?.cancel()
+            liveSession = nil
+            state.liveStreamActive = false
+            state.liveStream.reset()
+            if let liveOutcome, liveOutcome.inserted {
+                state.addHistory(HistoryEntry(
+                    id: UUID(),
+                    date: Date(),
+                    raw: liveOutcome.raw,
+                    text: liveOutcome.text,
+                    duration: Date().timeIntervalSince(listenStarted),
+                    app: dictationApp?.name ?? inserter.frontmostAppName(),
+                    wasCommand: false
+                ))
+            }
             _ = recorder.stop()
             ticker?.invalidate()
             state.handsFree = false
             show(.notice(L10n.s("notice.cancelled")), resetAfter: 0.9)
         case .transcribing, .polishing, .translating:
+            liveSession?.cancel()
+            liveSession = nil
+            state.liveStreamActive = false
+            state.liveStream.reset()
             job?.cancel()
             selectionTask?.cancel()
             selectionTask = nil
@@ -480,8 +560,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func stopAndProcess() {
         guard state.phase == .listening else { return }
+        acceptingLive = false
         Timing.begin("---- recording stopped")
         releaseSilence()
+        if let session = liveSession {
+            finishLive(session)
+            return
+        }
         let wav = recorder.stop()
         let duration = Date().timeIntervalSince(listenStarted)
         state.handsFree = false
@@ -757,6 +842,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private func finishLive(_ session: LiveDictation) {
+        let duration = Date().timeIntervalSince(listenStarted)
+        state.handsFree = false
+        ticker?.invalidate()
+        if state.config.playSounds { NSSound(named: "Pop")?.play() }
+        selectionTask?.cancel()
+        selectionTask = nil
+        let front = FrontApp.current() ?? dictationApp
+        if let front { state.rememberApp(front) }
+        let appName = front?.name ?? inserter.frontmostAppName()
+        let generation = dictationGeneration
+        show(.transcribing)
+        job = Task { @MainActor in
+            let outcome = await session.finish()
+            guard !Task.isCancelled, generation == self.dictationGeneration else { return }
+            guard self.liveSession === session else { return }
+            self.liveSession = nil
+            self.state.liveStreamActive = false
+            self.state.liveStream.reset()
+            guard outcome.inserted else {
+                let key = outcome.raw.isEmpty ? "notice.nothingHeard" : "notice.nothingRecognized"
+                self.show(.notice(L10n.s(key)), resetAfter: 1.4)
+                return
+            }
+            self.finishDeliver(
+                text: outcome.text,
+                raw: outcome.raw,
+                duration: duration,
+                app: appName,
+                command: false,
+                pasted: outcome.pasted,
+                fieldText: outcome.pasted ? outcome.text : nil,
+                fromLive: true
+            )
+        }
+    }
+
     private func finishNoteSave(
         body: String,
         spoken: String,
@@ -992,7 +1114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         app: String?,
         command: Bool,
         pasted: Bool,
-        fieldText: String? = nil
+        fieldText: String? = nil,
+        fromLive: Bool = false
     ) {
         state.rewriting = false
         state.addHistory(HistoryEntry(
@@ -1004,7 +1127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             app: app,
             wasCommand: command
         ))
-        if state.config.showDictationPreview {
+        if fromLive && pasted {
+            clearDictationPreview()
+            show(.idle)
+        } else if state.config.showDictationPreview {
             if pasted {
                 // Insert succeeded — drop the preview without morphing to a countdown bar.
                 clearDictationPreview()
@@ -1177,26 +1303,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func updateIcon(_ phase: Phase) {
         guard let button = statusItem?.button else { return }
         let listening = phase == .listening
+        // Idle: waveform. Recording: orange waveform. After speech: phase-specific glyphs
+        // instead of ellipsis.circle (circle-with-dots felt like a generic spinner).
         let symbol: String
         switch phase {
-        case .transcribing, .polishing, .translating:
-            symbol = "ellipsis.circle"
+        case .transcribing:
+            symbol = "text.bubble"
+        case .polishing:
+            symbol = "sparkles"
+        case .translating:
+            symbol = "globe"
         default:
             symbol = "waveform"
         }
-        let badge = state.showsUpdateOffer && symbol == "waveform"
+        let idle = symbol == "waveform"
+        let badge = state.showsUpdateOffer && idle && !listening
         button.image = menuImage(symbol: symbol, badge: badge, tint: listening ? .systemOrange : nil)
         button.contentTintColor = nil
-        button.setAccessibilityLabel(menuIconLabel(listening: listening, badge: badge))
+        button.setAccessibilityLabel(menuIconLabel(phase: phase, badge: badge))
         statusItem.length = badge ? 32 : NSStatusItem.squareLength
     }
 
-    private func menuIconLabel(listening: Bool, badge: Bool) -> String {
-        switch (listening, badge) {
-        case (true, true): return L10n.s("status.icon.both")
-        case (true, false): return L10n.s("status.icon.recording")
-        case (false, true): return L10n.s("status.icon.update")
-        case (false, false): return L10n.s("status.icon")
+    private func menuIconLabel(phase: Phase, badge: Bool) -> String {
+        switch phase {
+        case .listening:
+            return badge ? L10n.s("status.icon.both") : L10n.s("status.icon.recording")
+        case .transcribing:
+            return L10n.s("status.icon.transcribing")
+        case .polishing:
+            return L10n.s("status.icon.polishing")
+        case .translating:
+            return L10n.s("status.icon.translating")
+        default:
+            return badge ? L10n.s("status.icon.update") : L10n.s("status.icon")
         }
     }
 

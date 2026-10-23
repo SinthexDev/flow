@@ -35,23 +35,23 @@ struct SettingsView: View {
                 }
                 Divider()
                 SettingRow(title: L10n.s("settings.recognition.title"), detail: recognitionDetail) {
-                    if state.config.usesWhistle {
+                    if state.config.recognitionLanguages.count <= 3 {
                         Picker("", selection: $state.config.language) {
-                            ForEach(FlowConfig.whistleLanguages, id: \.self) { code in
+                            ForEach(state.config.recognitionLanguages, id: \.self) { code in
+                                Text(L10n.s("lang.\(code)")).tag(code)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Picker("", selection: $state.config.language) {
+                            ForEach(state.config.recognitionLanguages, id: \.self) { code in
                                 Text(L10n.s("lang.\(code)")).tag(code)
                             }
                         }
                         .labelsHidden()
                         .fixedSize()
-                    } else {
-                        Picker("", selection: $state.config.language) {
-                            Text(L10n.s("lang.auto")).tag("auto")
-                            Text(L10n.s("lang.de")).tag("de")
-                            Text(L10n.s("lang.en")).tag("en")
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .frame(maxWidth: .infinity)
                     }
                 }
             }
@@ -151,6 +151,19 @@ struct SettingsView: View {
                             .fixedSize()
                         }
                         Divider()
+                        SettingRow(title: L10n.s("settings.live.title"), detail: L10n.s("settings.live.detail")) {
+                            Toggle("", isOn: $state.config.liveDictation).labelsHidden().toggleStyle(.switch)
+                        }
+                        if state.config.liveDictation {
+                            Divider()
+                            SettingRow(
+                                title: L10n.s("settings.live.preview.title"),
+                                detail: L10n.s("settings.live.preview.detail")
+                            ) {
+                                Toggle("", isOn: $state.config.liveDictationPreview).labelsHidden().toggleStyle(.switch)
+                            }
+                        }
+                        Divider()
                         SettingRow(title: L10n.s("settings.resultPlace.title"), detail: L10n.s("settings.resultPlace.detail")) {
                             Toggle("", isOn: $state.config.resultPlacementFixed).labelsHidden().toggleStyle(.switch)
                         }
@@ -199,45 +212,40 @@ struct SettingsView: View {
             }
 
             SettingsSection(title: L10n.s("settings.asr.title"), icon: "waveform") {
-                SettingRow(title: L10n.s("settings.asr.engine"), detail: L10n.s("settings.asr.engine.detail")) {
-                    Picker("", selection: asrEngineBinding) {
-                        Text(L10n.s("settings.asr.whisper")).tag("whisper")
-                        Text(L10n.s("settings.asr.whistle")).tag("whistle")
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.s("settings.asr.engine")).font(.system(size: 13, weight: .medium))
+                        Text(L10n.s("settings.asr.engine.detail"))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: .infinity)
+                    EngineChoiceList(selection: asrEngineBinding)
                 }
-                Divider()
-                SettingRow(title: L10n.s("settings.asr.quality"), detail: asrQualityDetail) {
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Slider(
-                            value: asrQualitySlider,
-                            in: 0...Double(FlowConfig.asrQualityMax),
-                            step: 1
-                        )
-                        HStack {
-                            Text(L10n.s("settings.asr.quality.low"))
-                            Spacer()
-                            Text(L10n.s("settings.asr.quality.high"))
+                if hasQualityTiers {
+                    Divider()
+                    SettingRow(title: L10n.s("settings.asr.quality"), detail: asrQualityDetail) {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Slider(
+                                value: asrQualitySlider,
+                                in: 0...Double(FlowConfig.asrQualityMax),
+                                step: 1
+                            )
+                            HStack {
+                                Text(L10n.s("settings.asr.quality.low"))
+                                Spacer()
+                                Text(L10n.s("settings.asr.quality.high"))
+                            }
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
                         }
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
                 }
                 Divider()
                 SettingRow(
-                    title: state.config.usesWhistle
-                        ? L10n.s("settings.asr.whistle")
-                        : L10n.s("settings.asr.whisper"),
-                    detail: SnapshotMode.isActive
-                        ? (state.config.usesWhistle
-                           ? L10n.s("settings.whistle.local")
-                           : L10n.s("settings.whisper.local"))
-                        : (state.config.usesWhistle
-                           ? L10n.s("settings.whistle.detail", SupportPaths.models.path)
-                           : L10n.s("settings.whisper.path", SupportPaths.models.path))
+                    title: L10n.s("settings.asr.\(engineTag)"),
+                    detail: modelFileDetail
                 ) {
                     Button(L10n.s("settings.reveal")) {
                         NSWorkspace.shared.activateFileViewerSelecting([SupportPaths.models])
@@ -560,9 +568,16 @@ struct SettingsView: View {
     }
 
     private var recognitionDetail: String {
-        state.config.usesWhistle
-            ? L10n.s("settings.recognition.detail.whistle")
-            : L10n.s("settings.recognition.detail")
+        switch state.config.asrEngine {
+        case "whistle":
+            return L10n.s("settings.recognition.detail.whistle")
+        case "parakeet":
+            return L10n.s("settings.recognition.detail.parakeet")
+        case "qwen3":
+            return L10n.s("settings.recognition.detail.qwen3")
+        default:
+            return L10n.s("settings.recognition.detail")
+        }
     }
 
     private var asrQualityDetail: String {
@@ -576,13 +591,39 @@ struct SettingsView: View {
         return L10n.s("settings.asr.quality.whisper", id)
     }
 
+    private var engineTag: String {
+        ["whisper", "whistle", "parakeet", "qwen3"].contains(state.config.asrEngine)
+            ? state.config.asrEngine : "whisper"
+    }
+
+    private var hasQualityTiers: Bool {
+        engineTag == "whisper" || engineTag == "whistle"
+    }
+
+    private var modelFileDetail: String {
+        switch engineTag {
+        case "whistle":
+            return SnapshotMode.isActive
+                ? L10n.s("settings.whistle.local")
+                : L10n.s("settings.whistle.detail", SupportPaths.models.path)
+        case "whisper":
+            return SnapshotMode.isActive
+                ? L10n.s("settings.whisper.local")
+                : L10n.s("settings.whisper.path", SupportPaths.models.path)
+        default:
+            return SnapshotMode.isActive
+                ? L10n.s("settings.asr.model.local")
+                : L10n.s("settings.asr.model.path", SupportPaths.models.path)
+        }
+    }
+
     private var asrEngineBinding: Binding<String> {
         Binding(
             get: { state.config.asrEngine },
             set: { next in
-                guard next == "whisper" || next == "whistle" else { return }
+                guard ["whisper", "whistle", "parakeet", "qwen3"].contains(next) else { return }
                 state.config.asrEngine = next
-                if !state.config.usesWhistle {
+                if next == "whisper" {
                     state.config.whisperModel = FlowConfig.whisperModel(for: state.config.clampedAsrQuality)
                 }
                 if !state.config.recognitionLanguages.contains(state.config.language) {

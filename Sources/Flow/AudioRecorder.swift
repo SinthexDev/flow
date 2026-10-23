@@ -63,7 +63,8 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         }
     }
 
-    func stop() -> Data? {
+    /// Stoppt die Session und behält das PCM, damit ein letzter Live-Tick es noch lesen kann.
+    func freeze() {
         _ = runOnSessionQueue {
             self.lock.lock()
             self.capturing = false
@@ -77,13 +78,46 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         isRecording = false
         converter = nil
         sourceFormat = nil
+    }
+
+    func stop() -> Data? {
+        freeze()
+        return takeWAV()
+    }
+
+    func pcmByteCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pcm.count
+    }
+
+    /// Kopie ab `byteOffset` (16 kHz, mono, Int16). Stoppt die Aufnahme nicht.
+    func snapshotPCM(from byteOffset: Int) -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        let start = min(max(0, byteOffset), pcm.count)
+        guard start < pcm.count else { return Data() }
+        return pcm.subdata(in: start..<pcm.count)
+    }
+
+    func wavIfUseful(_ pcm: Data, minimumBytes: Int = 8_000) -> Data? {
+        guard pcm.count >= minimumBytes else { return nil }
+        return wavData(from: pcm)
+    }
+
+    func discardBuffer() {
+        lock.lock()
+        pcm.removeAll(keepingCapacity: false)
+        lock.unlock()
+    }
+
+    private func takeWAV() -> Data? {
         lock.lock()
         let captured = pcm
         pcm.removeAll(keepingCapacity: false)
         lock.unlock()
         // Unter 0,25 Sekunden ist kein sinnvolles Diktat.
-        guard captured.count >= 8_000 else { return nil }
-        return wavData(from: captured)
+        return wavIfUseful(captured)
     }
 
     func captureOutput(

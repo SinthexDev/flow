@@ -7,9 +7,13 @@ Flow ist ein eigenständiges Programm. Es nutzt die folgenden Open-Source-Projek
 | Projekt | Wofür | Lizenz | Quelle |
 | --- | --- | --- | --- |
 | [mlx-whisper](https://github.com/ml-explore/mlx-examples) 0.4.3 | Spracherkennung auf Apple Silicon | MIT, Copyright © 2024 Apple Inc. | MLX Contributors |
+| [parakeet-mlx](https://github.com/senstella/parakeet-mlx) | Parakeet-ASR auf Apple Silicon | Apache-2.0 | senstella |
+| [mlx-qwen3-asr](https://github.com/moona3k/mlx-qwen3-asr) | Qwen3-ASR auf Apple Silicon | Apache-2.0 | moona3k |
 | [MLX](https://github.com/ml-explore/mlx) | Rechenbibliothek für Apple Silicon | MIT, Copyright © 2023 Apple Inc. | MLX Contributors |
 | [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) | Optionale lokale Korrektur | MIT, Copyright © 2025 Prince Canuma | Prince Canuma |
 | [Whisper](https://github.com/openai/whisper) large-v3-turbo | Modellgewichte, über `mlx-community/whisper-large-v3-turbo` | MIT, Copyright (c) 2022 OpenAI | OpenAI |
+| [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | Modellgewichte, über `mlx-community/parakeet-tdt-0.6b-v3` | CC-BY-4.0 | NVIDIA |
+| [Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) | Modellgewichte | Apache-2.0 | Qwen |
 
 Die Modellkarte von [openai/whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) nennt die Lizenz **MIT**. Die MLX-Fassung [mlx-community/whisper-large-v3-turbo](https://huggingface.co/mlx-community/whisper-large-v3-turbo) ist eine Konvertierung dieses Modells.
 

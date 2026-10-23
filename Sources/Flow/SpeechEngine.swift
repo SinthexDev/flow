@@ -11,6 +11,8 @@ struct HealthBody: Codable {
 struct TextBody: Codable {
     var text: String
     var language: String?
+    /// Ende jedes Wortes in Sekunden ab Clip-Anfang. Nur bei `timed` und Whisper.
+    var ends: [Double]?
 }
 
 struct ErrorBody: Codable {
@@ -132,15 +134,35 @@ final class SpeechEngine {
         session.dataTask(with: request).resume()
     }
 
-    func transcribe(wav: Data, language: String, port: Int) async throws -> String {
+    func transcribe(wav: Data, language: String, port: Int, prompt: String? = nil) async throws -> String {
+        try await transcribeTimed(wav: wav, language: language, port: port, prompt: prompt, timed: false).text
+    }
+
+    /// Wie `transcribe`, mit Wortenden für Flow Stream. `ends` fehlt, wenn die Engine sie nicht liefert.
+    func transcribeTimed(
+        wav: Data,
+        language: String,
+        port: Int,
+        prompt: String? = nil,
+        timed: Bool = true
+    ) async throws -> (text: String, ends: [Double]?) {
         var components = URLComponents(url: endpoint("/transcribe", port: port), resolvingAgainstBaseURL: false)
-        components?.queryItems = [URLQueryItem(name: "language", value: language)]
+        var items = [URLQueryItem(name: "language", value: language)]
+        if let prompt {
+            let clipped = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !clipped.isEmpty {
+                items.append(URLQueryItem(name: "prompt", value: String(clipped.suffix(500))))
+            }
+        }
+        if timed { items.append(URLQueryItem(name: "timed", value: "1")) }
+        components?.queryItems = items
         var request = URLRequest(url: components?.url ?? endpoint("/transcribe", port: port))
         request.httpMethod = "POST"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await session.upload(for: request, from: wav)
         try validate(data: data, response: response)
-        return try JSONDecoder().decode(TextBody.self, from: data).text
+        let body = try JSONDecoder().decode(TextBody.self, from: data)
+        return (body.text, body.ends)
     }
 
     func polish(

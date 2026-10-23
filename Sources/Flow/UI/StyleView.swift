@@ -109,26 +109,24 @@ struct StyleView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Label(L10n.s("style.language"), systemImage: "globe")
                         .font(.system(size: 14, weight: .semibold))
-                    if state.config.usesWhistle {
+                    if state.config.recognitionLanguages.count <= 3 {
                         Picker("", selection: $state.config.language) {
-                            ForEach(FlowConfig.whistleLanguages, id: \.self) { code in
+                            ForEach(state.config.recognitionLanguages, id: \.self) { code in
+                                Text(L10n.s("lang.\(code)")).tag(code)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                    } else {
+                        Picker("", selection: $state.config.language) {
+                            ForEach(state.config.recognitionLanguages, id: \.self) { code in
                                 Text(L10n.s("lang.\(code)")).tag(code)
                             }
                         }
                         .labelsHidden()
                         .fixedSize()
-                    } else {
-                        Picker("", selection: $state.config.language) {
-                            Text(L10n.s("lang.auto")).tag("auto")
-                            Text(L10n.s("lang.de")).tag("de")
-                            Text(L10n.s("lang.en")).tag("en")
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
                     }
-                    Text(state.config.usesWhistle
-                         ? L10n.s("style.languageHint.whistle")
-                         : L10n.s("style.languageHint"))
+                    Text(languageHint)
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                 }
@@ -154,6 +152,19 @@ struct StyleView: View {
             }
         }
         .onAppear { state.rescanApps() }
+    }
+
+    private var languageHint: String {
+        switch state.config.asrEngine {
+        case "whistle":
+            return L10n.s("style.languageHint.whistle")
+        case "parakeet":
+            return L10n.s("style.languageHint.parakeet")
+        case "qwen3":
+            return L10n.s("style.languageHint.qwen3")
+        default:
+            return L10n.s("style.languageHint")
+        }
     }
 
     private var appStyles: some View {

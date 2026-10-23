@@ -1,7 +1,8 @@
-"""HTTP-Dienst: Whisper oder Whistle transkribiert, OpenAI oder Qwen formuliert."""
+"""HTTP-Dienst: lokale ASR transkribiert, OpenAI oder Qwen formuliert."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
@@ -10,6 +11,7 @@ import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote_plus
 
 from flow_engine.openai_polish import complete_chain, model_catalog
 from flow_engine.polish import (
@@ -24,9 +26,14 @@ from flow_engine.transcribe import (
     needs_warmup,
     resolve_asr_engine,
     resolve_asr_quality,
+    transcribe_parakeet,
+    transcribe_qwen3,
     transcribe_wav,
+    transcribe_wav_timed,
     transcribe_whistle,
     warmup,
+    warmup_parakeet,
+    warmup_qwen3,
     warmup_whistle,
     whisper_model_for_quality,
 )
@@ -56,6 +63,28 @@ def configure_cache() -> None:
     os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub)
     os.environ["FLOW_MODELS"] = str(root)
     os.environ.setdefault("NEEDLE_TELEMETRY", "0")
+
+
+def _query_value(path: str, key: str, default: str = "") -> str:
+    if "?" not in path:
+        return default
+    prefix = key + "="
+    for part in path.split("?", 1)[1].split("&"):
+        if part.startswith(prefix):
+            return unquote_plus(part.split("=", 1)[1])
+    return default
+
+
+def _live_prompt(glossary: str, hint: str) -> str:
+    """Wörterbuch vorn, der schon eingefügte Rohtext hinten. Whisper behält den Anfang."""
+    hint = " ".join((hint or "").split())
+    if not hint:
+        return glossary
+    tail = hint[-600:]
+    head = (glossary or "")[:180].strip()
+    if not head:
+        return tail
+    return f"{head}\n{tail}"
 
 
 def read_config() -> dict:
@@ -109,6 +138,14 @@ class Engine:
             print(f"Lade Whistle (Qualität {quality})", flush=True)
             warmup_whistle(quality=quality)
             print("Whistle bereit", flush=True)
+        elif asr == "parakeet":
+            print("Lade Parakeet TDT 0.6B v3", flush=True)
+            warmup_parakeet()
+            print("Parakeet bereit", flush=True)
+        elif asr == "qwen3":
+            print("Lade Qwen3-ASR 0.6B", flush=True)
+            warmup_qwen3()
+            print("Qwen3-ASR bereit", flush=True)
         else:
             print(f"Lade Whisper {whisper_model}", flush=True)
             warmup(whisper_model)
@@ -130,7 +167,7 @@ class Engine:
         self.polish_ready = True
         print(f"Qwen geladen in {time.perf_counter() - started:.1f}s", flush=True)
 
-    def transcribe(self, wav: bytes, language: str) -> dict:
+    def transcribe(self, wav: bytes, language: str, prompt: str = "", timed: bool = False) -> dict:
         with self._lock:
             if not self.ready:
                 raise RuntimeError(self.error or "Modell wird noch geladen")
@@ -140,19 +177,34 @@ class Engine:
             lang = language or config.get("language") or "auto"
             asr = resolve_asr_engine(config.get("asrEngine") or DEFAULT_ASR_ENGINE)
             quality = resolve_asr_quality(config.get("asrQuality"))
+            ends = None
             if asr == "whistle":
                 text, detected = transcribe_whistle(
                     wav, lang, keywords=terms, quality=quality
+                )
+            elif asr == "parakeet":
+                text, detected = transcribe_parakeet(wav, lang)
+            elif asr == "qwen3":
+                text, detected = transcribe_qwen3(wav, lang)
+            elif timed:
+                text, detected, ends = transcribe_wav_timed(
+                    wav,
+                    config.get("whisperModel") or whisper_model_for_quality(quality),
+                    lang,
+                    _live_prompt(glossary, prompt),
                 )
             else:
                 text, detected = transcribe_wav(
                     wav,
                     config.get("whisperModel") or whisper_model_for_quality(quality),
                     lang,
-                    glossary,
+                    _live_prompt(glossary, prompt),
                 )
             self._last_touch = time.perf_counter()
-            return {"text": text, "language": detected}
+            reply = {"text": text, "language": detected}
+            if ends:
+                reply["ends"] = ends
+            return reply
 
     def touch(self, _payload=None) -> dict:
         """Kurzer ASR-Durchlauf, damit die Gewichte vor dem Diktat wieder im Speicher sind."""
@@ -169,6 +221,12 @@ class Engine:
             if asr == "whistle":
                 warmup_whistle(quality=quality)
                 label = "Whistle"
+            elif asr == "parakeet":
+                warmup_parakeet()
+                label = "Parakeet"
+            elif asr == "qwen3":
+                warmup_qwen3()
+                label = "Qwen3-ASR"
             else:
                 warmup(config.get("whisperModel") or whisper_model_for_quality(quality))
                 label = "Whisper"
@@ -177,8 +235,15 @@ class Engine:
             print(f"{label} aufgewärmt in {elapsed:.1f}s", flush=True)
             return {"ok": True, "ms": int(elapsed * 1000)}
 
+    def uses_remote_polish(self, payload: dict) -> bool:
+        provider = (payload.get("provider") or read_config().get("polishProvider") or self.polish_provider)
+        return str(provider).strip() == "openai"
+
     def polish(self, payload: dict) -> dict:
-        with self._lock:
+        # Eine Online-Korrektur wartet nur auf das Netz. Sie darf weder die Erkennung
+        # noch eine zweite Korrektur aufhalten, sonst stockt Flow Stream.
+        remote = self.uses_remote_polish(payload)
+        with (contextlib.nullcontext() if remote else self._lock):
             if not self.ready:
                 raise RuntimeError(self.error or "Modell wird noch geladen")
             raw = (payload.get("raw") or "").strip()
@@ -366,16 +431,24 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, call_model(ENGINE.touch, None, timeout=180))
                 return
             if path == "/transcribe":
-                language = "auto"
-                if "?" in self.path:
-                    for part in self.path.split("?", 1)[1].split("&"):
-                        if part.startswith("language="):
-                            language = part.split("=", 1)[1]
-                self._send(200, call_model(lambda body: ENGINE.transcribe(body, language), raw))
+                language = _query_value(self.path, "language", "auto") or "auto"
+                prompt = _query_value(self.path, "prompt", "")
+                timed = _query_value(self.path, "timed", "") == "1"
+                self._send(
+                    200,
+                    call_model(
+                        lambda body, lang=language, hint=prompt, t=timed: ENGINE.transcribe(body, lang, hint, t),
+                        raw,
+                    ),
+                )
                 return
             if path == "/polish":
                 payload = json.loads(raw.decode("utf-8") or "{}")
-                self._send(200, call_model(ENGINE.polish, payload))
+                if ENGINE.uses_remote_polish(payload):
+                    # Direkt im Anfrage-Thread: Netzwartezeit blockiert die Modell-Warteschlange nicht.
+                    self._send(200, ENGINE.polish(payload))
+                else:
+                    self._send(200, call_model(ENGINE.polish, payload))
                 return
             self._send(404, {"error": "nicht gefunden"})
         except Exception as exc:  # noqa: BLE001

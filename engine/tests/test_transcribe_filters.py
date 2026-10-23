@@ -96,7 +96,10 @@ class PunctuationCleanupTests(unittest.TestCase):
 class WhistleHelperTests(unittest.TestCase):
     def test_resolve_asr_engine(self):
         self.assertEqual(resolve_asr_engine("whistle"), "whistle")
+        self.assertEqual(resolve_asr_engine("parakeet"), "parakeet")
+        self.assertEqual(resolve_asr_engine("qwen3"), "qwen3")
         self.assertEqual(resolve_asr_engine("Whisper"), "whisper")
+        self.assertEqual(resolve_asr_engine("nope"), "whisper")
         self.assertEqual(resolve_asr_engine(None), "whisper")
 
     def test_whistle_language(self):

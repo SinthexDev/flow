@@ -78,7 +78,7 @@ struct OverlayResultChoice: Equatable, Identifiable {
 struct FlowConfig: Codable, Equatable {
     var modelPath: String
     var whisperModel: String
-    /// whisper = mlx-whisper, whistle = Cactus Whistle (kleiner, 7 Sprachen)
+    /// whisper | whistle | parakeet | qwen3
     var asrEngine: String
     /// 0 = schnell/klein … 4 = genau/groß (Whisper-Modell bzw. Whistle-Depth)
     var asrQuality: Int
@@ -138,6 +138,10 @@ struct FlowConfig: Codable, Equatable {
     var historyMaxEntries: Int = 500
     /// Nach dem Diktat den erkannten Text kurz im Minifenster zeigen.
     var showDictationPreview: Bool = true
+    /// Experimentell: Sätze schon während der Aufnahme korrigieren und einfügen.
+    var liveDictation: Bool = false
+    /// Flow-Stream-Karte über dem Widget. Die Pipeline läuft auch ohne Karte.
+    var liveDictationPreview: Bool = true
     /// Sekunden, bis die Diktat-Vorschau nach erfolgreichem Einfügen schließt. 0 = bleibt offen.
     var dictationPreviewDismissSeconds: Int = 1
     /// true = Ergebnis- und Diktat-Karten an einem festen Anker, nicht am Widget-Platz.
@@ -163,8 +167,20 @@ struct FlowConfig: Codable, Equatable {
     static let asrQualityMax = 4
     static let defaultPolishProvider = "openai"
     static let defaultOpenAIModel = "gpt-4.1-mini"
+    static let asrEngines = ["whisper", "whistle", "parakeet", "qwen3"]
     static let whistleLanguages = ["auto", "de", "en", "fr", "es", "it", "nl", "pl"]
     static let whisperLanguages = ["auto", "de", "en"]
+    /// NVIDIA Parakeet TDT 0.6B v3 — 25 europäische Sprachen.
+    static let parakeetLanguages = [
+        "auto", "de", "en", "fr", "es", "it", "nl", "pl", "pt", "sv", "da", "fi",
+        "cs", "hu", "ro", "el", "bg", "hr", "sk", "sl", "et", "lv", "lt", "mt", "ru", "uk",
+    ]
+    /// Qwen3-ASR 0.6B — ca. 30 Sprachen inkl. Asien.
+    static let qwen3Languages = [
+        "auto", "de", "en", "fr", "es", "it", "nl", "pl", "pt", "sv", "da", "fi",
+        "cs", "hu", "ro", "el", "tr", "ru", "zh", "yue", "ja", "ko", "ar", "hi",
+        "id", "ms", "th", "vi", "fil", "fa", "mk",
+    ]
     static let whisperModelsByQuality = [
         "mlx-community/whisper-tiny",
         "mlx-community/whisper-base-mlx",
@@ -266,7 +282,7 @@ struct FlowConfig: Codable, Equatable {
         modelPath = try c.decodeIfPresent(String.self, forKey: .modelPath) ?? d.modelPath
         whisperModel = try c.decodeIfPresent(String.self, forKey: .whisperModel) ?? d.whisperModel
         if let engine = try c.decodeIfPresent(String.self, forKey: .asrEngine),
-           engine == "whisper" || engine == "whistle" {
+           Self.asrEngines.contains(engine) {
             asrEngine = engine
         } else {
             asrEngine = d.asrEngine
@@ -333,6 +349,8 @@ struct FlowConfig: Codable, Equatable {
         }
         historyMaxEntries = max(0, try c.decodeIfPresent(Int.self, forKey: .historyMaxEntries) ?? 500)
         showDictationPreview = try c.decodeIfPresent(Bool.self, forKey: .showDictationPreview) ?? true
+        liveDictation = try c.decodeIfPresent(Bool.self, forKey: .liveDictation) ?? false
+        liveDictationPreview = try c.decodeIfPresent(Bool.self, forKey: .liveDictationPreview) ?? true
         if let stored = try c.decodeIfPresent(Int.self, forKey: .overlayResultDismissSeconds) {
             overlayResultDismissSeconds = max(0, stored)
         } else {
@@ -420,6 +438,8 @@ struct FlowConfig: Codable, Equatable {
         try c.encode(historyKeepHours, forKey: .historyKeepHours)
         try c.encode(historyMaxEntries, forKey: .historyMaxEntries)
         try c.encode(showDictationPreview, forKey: .showDictationPreview)
+        try c.encode(liveDictation, forKey: .liveDictation)
+        try c.encode(liveDictationPreview, forKey: .liveDictationPreview)
         try c.encode(dictationPreviewDismissSeconds, forKey: .dictationPreviewDismissSeconds)
         try c.encode(resultPlacementFixed, forKey: .resultPlacementFixed)
         try c.encode(resultPlacementScreen, forKey: .resultPlacementScreen)
@@ -429,13 +449,22 @@ struct FlowConfig: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case modelPath, whisperModel, asrEngine, asrQuality, polishProvider, openAIModel, correctionBaseURL, correctionKind, correctionFallback, correctionEndpoints, didChooseModel, appStyles, language, nativeLanguage, style, instructions, dictionary
-        case commandMode, autoCorrect, hotkey, playSounds, inputDeviceUID, muteOthers, othersAudio, learnEdits, launchAtLogin, onboarded, port, widgetX, widgetY, widgetDisplayID, widgetFollowActiveScreen, showWidget, widgetAlwaysVisible, overlayResultSize, overlayResultDismissSeconds, historyKeepHours, historyKeepDays, historyMaxEntries, showDictationPreview, dictationPreviewDismissSeconds, resultPlacementFixed, resultPlacementScreen, resultPlacementAnchor, noteDestination
+        case commandMode, autoCorrect, hotkey, playSounds, inputDeviceUID, muteOthers, othersAudio, learnEdits, launchAtLogin, onboarded, port, widgetX, widgetY, widgetDisplayID, widgetFollowActiveScreen, showWidget, widgetAlwaysVisible, overlayResultSize, overlayResultDismissSeconds, historyKeepHours, historyKeepDays, historyMaxEntries, showDictationPreview, dictationPreviewDismissSeconds, liveDictation, liveDictationPreview, resultPlacementFixed, resultPlacementScreen, resultPlacementAnchor, noteDestination
     }
 
     var usesWhistle: Bool { asrEngine == "whistle" }
+    var usesParakeet: Bool { asrEngine == "parakeet" }
+    var usesQwen3Asr: Bool { asrEngine == "qwen3" }
+    var usesWhisper: Bool { asrEngine == "whisper" || (!usesWhistle && !usesParakeet && !usesQwen3Asr) }
+    var hasAsrQualityTiers: Bool { usesWhisper || usesWhistle }
 
     var recognitionLanguages: [String] {
-        usesWhistle ? Self.whistleLanguages : Self.whisperLanguages
+        switch asrEngine {
+        case "whistle": return Self.whistleLanguages
+        case "parakeet": return Self.parakeetLanguages
+        case "qwen3": return Self.qwen3Languages
+        default: return Self.whisperLanguages
+        }
     }
 
     var clampedAsrQuality: Int {
@@ -466,7 +495,7 @@ struct FlowConfig: Codable, Equatable {
 
     mutating func applyAsrQuality(_ quality: Int) {
         asrQuality = min(Self.asrQualityMax, max(0, quality))
-        if !usesWhistle {
+        if usesWhisper {
             whisperModel = Self.whisperModel(for: asrQuality)
         }
     }

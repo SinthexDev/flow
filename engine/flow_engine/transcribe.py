@@ -1,4 +1,4 @@
-"""Spracherkennung mit mlx-whisper, ohne ffmpeg."""
+"""Spracherkennung lokal: Whisper, Whistle, Parakeet oder Qwen3-ASR, ohne ffmpeg."""
 
 from __future__ import annotations
 
@@ -218,10 +218,72 @@ def discard_transcript(segments: list, text: str) -> bool:
 
 
 WHISTLE_LANGUAGES = ("en", "de", "fr", "es", "it", "nl", "pl")
+PARAKEET_LANGUAGES = (
+    "bg",
+    "hr",
+    "cs",
+    "da",
+    "nl",
+    "en",
+    "et",
+    "fi",
+    "fr",
+    "de",
+    "el",
+    "hu",
+    "it",
+    "lv",
+    "lt",
+    "mt",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "es",
+    "sv",
+    "uk",
+)
+QWEN3_LANGUAGES = (
+    "zh",
+    "en",
+    "yue",
+    "ar",
+    "de",
+    "fr",
+    "es",
+    "pt",
+    "id",
+    "it",
+    "ko",
+    "ru",
+    "th",
+    "vi",
+    "ja",
+    "tr",
+    "hi",
+    "ms",
+    "nl",
+    "sv",
+    "da",
+    "fi",
+    "pl",
+    "cs",
+    "fil",
+    "fa",
+    "el",
+    "hu",
+    "mk",
+    "ro",
+)
 WHISTLE_MAX_SECONDS = 30
 WHISTLE_SAMPLE_RATE = 16_000
 WHISTLE_CHUNK_SAMPLES = WHISTLE_SAMPLE_RATE  # ~1 s for the streaming path
 ASR_QUALITY_MAX = 4
+ASR_ENGINES = ("whisper", "whistle", "parakeet", "qwen3")
+PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
+QWEN3_MODEL = "Qwen/Qwen3-ASR-0.6B"
 # Low → High. Whistle depth is selected at load via the native CLI (--audio-depth).
 WHISTLE_DEPTHS = (2, 3, 4, 6, 8)
 WHISPER_MODELS = (
@@ -232,10 +294,15 @@ WHISPER_MODELS = (
     "mlx-community/whisper-large-v3-turbo",
 )
 
+_parakeet_model = None
+_parakeet_model_id = ""
+_qwen3_session = None
+_qwen3_model_id = ""
+
 
 def resolve_asr_engine(value: str | None) -> str:
     engine = (value or "whisper").strip().lower()
-    return "whistle" if engine == "whistle" else "whisper"
+    return engine if engine in ASR_ENGINES else "whisper"
 
 
 def resolve_asr_quality(value: object | None) -> int:
@@ -423,6 +490,143 @@ def transcribe_whistle(
     return text, language_out
 
 
+def _impulse_audio(seconds: float = 1.0) -> np.ndarray:
+    samples = max(1, int(seconds * WHISTLE_SAMPLE_RATE))
+    audio = np.zeros(samples, dtype=np.float32)
+    audio[80:160] = 0.04
+    return audio
+
+
+def _get_parakeet(model_id: str = PARAKEET_MODEL):
+    global _parakeet_model, _parakeet_model_id
+    if _parakeet_model is None or _parakeet_model_id != model_id:
+        from parakeet_mlx import from_pretrained
+
+        _parakeet_model = from_pretrained(model_id)
+        _parakeet_model_id = model_id
+    return _parakeet_model
+
+
+def _get_qwen3(model_id: str = QWEN3_MODEL):
+    global _qwen3_session, _qwen3_model_id
+    if _qwen3_session is None or _qwen3_model_id != model_id:
+        from mlx_qwen3_asr import Session
+
+        _qwen3_session = Session(model=model_id)
+        _qwen3_model_id = model_id
+    return _qwen3_session
+
+
+def parakeet_language(language: str | None) -> str | None:
+    code = (language or "").strip().lower()
+    if not code or code == "auto":
+        return None
+    return code if code in PARAKEET_LANGUAGES else None
+
+
+def qwen3_language(language: str | None) -> str | None:
+    code = (language or "").strip().lower()
+    if not code or code == "auto":
+        return None
+    return code if code in QWEN3_LANGUAGES else None
+
+
+def _parakeet_from_audio(audio: np.ndarray, model_id: str = PARAKEET_MODEL):
+    """Decode PCM without ffmpeg (parakeet-mlx's file loader always shells out)."""
+    import mlx.core as mx
+    from parakeet_mlx.audio import get_logmel
+
+    model = _get_parakeet(model_id)
+    minimum = int(getattr(model.preprocessor_config, "hop_length", 1) or 1)
+    if len(audio) < minimum:
+        padded = np.zeros(minimum, dtype=np.float32)
+        padded[: len(audio)] = audio
+        audio = padded
+    mel = get_logmel(mx.array(audio), model.preprocessor_config)
+    return model.generate(mel)[0]
+
+
+def transcribe_parakeet(
+    wav: bytes,
+    language: str = "auto",
+    model_id: str = PARAKEET_MODEL,
+) -> tuple[str, str]:
+    """Parakeet TDT 0.6B v3 via MLX. Language is auto-detected; `language` is unused."""
+    del language  # Parakeet v3 detects language; kept for a stable call shape.
+    audio = wav_to_audio(wav)
+    if is_near_silence(audio):
+        return "", ""
+
+    result = _parakeet_from_audio(audio, model_id)
+    text = normalize_dictation_text((getattr(result, "text", None) or str(result) or "").strip())
+    if discard_transcript([], text):
+        return "", ""
+    return text, ""
+
+
+def transcribe_qwen3(
+    wav: bytes,
+    language: str = "auto",
+    model_id: str = QWEN3_MODEL,
+) -> tuple[str, str]:
+    """Qwen3-ASR 0.6B via MLX."""
+    audio = wav_to_audio(wav)
+    if is_near_silence(audio):
+        return "", ""
+
+    session = _get_qwen3(model_id)
+    forced = qwen3_language(language)
+    result = session.transcribe(
+        (audio, WHISTLE_SAMPLE_RATE),
+        language=forced,
+    )
+    language_out = (getattr(result, "language", None) or "").strip()
+    text = normalize_dictation_text((getattr(result, "text", None) or "").strip())
+    if discard_transcript([], text):
+        return "", language_out
+    return text, language_out
+
+
+def warmup_parakeet(model_id: str = PARAKEET_MODEL) -> None:
+    _parakeet_from_audio(_impulse_audio(), model_id)
+
+
+def warmup_qwen3(model_id: str = QWEN3_MODEL) -> None:
+    session = _get_qwen3(model_id)
+    session.transcribe((_impulse_audio(), WHISTLE_SAMPLE_RATE), language="de")
+
+
+def _whisper_options(
+    model_id: str,
+    language: str,
+    initial_prompt: str,
+    word_timestamps: bool = False,
+) -> dict:
+    options: dict = {
+        "path_or_hf_repo": model_id,
+        "verbose": False,
+        "condition_on_previous_text": False,
+        # One greedy pass. A temperature ladder decodes the clip again when the
+        # first pass looks uncertain, which is the pause after the words are known.
+        # mlx-whisper has no beam search: any beam_size, including 1, raises
+        # NotImplementedError. Leaving it unset keeps the greedy decoder.
+        "temperature": 0.0,
+        "without_timestamps": True,
+        "word_timestamps": word_timestamps,
+        "no_speech_threshold": 0.6,
+        "compression_ratio_threshold": 2.4,
+    }
+    if language and language != "auto":
+        options["language"] = language
+    prompt = initial_prompt.strip()
+    if len(prompt) > 800:
+        cut = prompt.rfind(", ", 0, 801)
+        prompt = prompt[:cut] if cut > 0 else prompt[:800]
+    if prompt:
+        options["initial_prompt"] = prompt
+    return options
+
+
 def transcribe_wav(
     wav: bytes,
     model_id: str,
@@ -435,29 +639,7 @@ def transcribe_wav(
     if is_near_silence(audio):
         return "", ""
 
-    options: dict = {
-        "path_or_hf_repo": model_id,
-        "verbose": False,
-        "condition_on_previous_text": False,
-        # One greedy pass. A temperature ladder decodes the clip again when the
-        # first pass looks uncertain, which is the pause after the words are known.
-        # mlx-whisper has no beam search: any beam_size, including 1, raises
-        # NotImplementedError. Leaving it unset keeps the greedy decoder.
-        "temperature": 0.0,
-        "without_timestamps": True,
-        "word_timestamps": False,
-        "no_speech_threshold": 0.6,
-        "compression_ratio_threshold": 2.4,
-    }
-    if language and language != "auto":
-        options["language"] = language
-    prompt = initial_prompt.strip()
-    if len(prompt) > 800:
-        cut = prompt.rfind(", ", 0, 801)
-        prompt = prompt[:cut] if cut > 0 else prompt[:800]
-    if prompt:
-        options["initial_prompt"] = prompt
-    result = mlx_whisper.transcribe(audio, **options)
+    result = mlx_whisper.transcribe(audio, **_whisper_options(model_id, language, initial_prompt))
 
     segments = result.get("segments") or []
     language_out = result.get("language") or ""
@@ -465,6 +647,52 @@ def transcribe_wav(
     if discard_transcript(segments, text):
         return "", language_out
     return text, language_out
+
+
+def word_end_times(segments: list, text: str) -> list[float] | None:
+    """Ende jedes Wortes in Sekunden. Nur wenn die Wortzahl exakt zum Text passt."""
+    ends: list[float] = []
+    for segment in segments or []:
+        for word in segment.get("words") or []:
+            if not str(word.get("word", "")).strip():
+                continue
+            end = word.get("end")
+            if end is None:
+                return None
+            ends.append(round(float(end), 3))
+    if not ends or len(ends) != len(text.split()):
+        return None
+    return ends
+
+
+def transcribe_wav_timed(
+    wav: bytes,
+    model_id: str,
+    language: str,
+    initial_prompt: str,
+) -> tuple[str, str, list[float] | None]:
+    """Wie transcribe_wav, dazu das Ende jedes Wortes. Für Flow Stream."""
+    import mlx_whisper
+
+    audio = wav_to_audio(wav)
+    if is_near_silence(audio):
+        return "", "", None
+
+    try:
+        result = mlx_whisper.transcribe(
+            audio, **_whisper_options(model_id, language, initial_prompt, word_timestamps=True)
+        )
+    except Exception:  # noqa: BLE001
+        # Wortzeiten sind nur Beigabe. Ohne sie läuft die Erkennung wie bisher.
+        text, language_out = transcribe_wav(wav, model_id, language, initial_prompt)
+        return text, language_out, None
+
+    segments = result.get("segments") or []
+    language_out = result.get("language") or ""
+    text = normalize_dictation_text((result.get("text") or "").strip())
+    if discard_transcript(segments, text):
+        return "", language_out, None
+    return text, language_out, word_end_times(segments, text)
 
 
 # After a short idle macOS pages Whisper weights out of fast memory.

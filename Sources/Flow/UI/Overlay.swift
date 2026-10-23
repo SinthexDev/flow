@@ -1,5 +1,6 @@
 import Cocoa
 import Combine
+import QuartzCore
 import SwiftUI
 
 final class OverlayController {
@@ -23,15 +24,18 @@ final class OverlayController {
     /// Moves a fixed “current screen” card when the pointer crosses displays.
     private var pointerScreenMonitor: Any?
     private var pointerScreenID: CGDirectDisplayID?
+    /// Last Flow Stream line count already applied to the panel, so token animations do not resize it.
+    private var liveLinesApplied = 0
 
     private enum Mode: Int {
-        case collapsed, bar, menu, result
+        case collapsed, bar, menu, liveStream, result
 
         func size(result: OverlayResultSize) -> NSSize {
             switch self {
             case .collapsed: return NSSize(width: 64, height: 48)
             case .bar: return NSSize(width: 228, height: 72)
             case .menu: return NSSize(width: 236, height: 478)
+            case .liveStream: return NSSize(width: result.cardWidth, height: 200)
             case .result: return result.panelSize
             }
         }
@@ -84,7 +88,7 @@ final class OverlayController {
                 state.$widgetTranslateOpen,
                 state.$overlayResult
             ),
-            Publishers.CombineLatest(state.$dictationPreview, state.$notePreview)
+            Publishers.CombineLatest3(state.$dictationPreview, state.$notePreview, state.$liveStreamActive)
         )
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -92,6 +96,19 @@ final class OverlayController {
                 self?.syncFollowTarget()
                 self?.updateMode()
                 self?.syncPanelVisibility()
+            }
+            .store(in: &cancellables)
+
+        state.liveStream.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.mode == .liveStream, self.state?.widgetDragging != true else { return }
+                    let lines = self.state?.liveStream.lineCount ?? 0
+                    guard lines != self.liveLinesApplied else { return }
+                    self.liveLinesApplied = lines
+                    self.applyFrame()
+                }
             }
             .store(in: &cancellables)
 
@@ -260,7 +277,7 @@ final class OverlayController {
             followAnchor = nil
             return
         }
-        let hasCard = state.overlayResult != nil
+        let hasCard = state.overlayResult != nil || state.liveStreamActive
         let busy = state.phase != .idle || hasCard
         guard state.config.widgetFollowActiveScreen, busy else {
             followDisplayID = nil
@@ -289,6 +306,7 @@ final class OverlayController {
     private func targetMode() -> Mode {
         guard let state else { return .collapsed }
         if state.overlayResult != nil || state.dictationPreview != nil || state.notePreview != nil { return .result }
+        if state.liveStreamActive { return .liveStream }
         if state.widgetTranslateOpen { return .menu }
         if state.widgetHovered || state.phase != .idle { return .bar }
         return .collapsed
@@ -321,7 +339,7 @@ final class OverlayController {
 
     private var usesFixedResultPlacement: Bool {
         guard state?.config.resultPlacementFixed == true else { return false }
-        return state?.dictationPreview != nil || state?.overlayResult != nil || state?.notePreview != nil
+        return state?.dictationPreview != nil || state?.overlayResult != nil || state?.notePreview != nil || state?.liveStreamActive == true
     }
 
     private func syncPointerScreenWatch() {
@@ -525,6 +543,10 @@ final class OverlayController {
         let size: NSSize
         if mode == .result, state?.notePreview != nil, state?.overlayResult == nil {
             size = NotePreviewLayout.panelSize
+        } else if mode == .liveStream {
+            let lines = state?.liveStream.lineCount ?? 1
+            liveLinesApplied = lines
+            size = LiveStreamLayout.panelSize(lines: lines, width: resultSize.cardWidth)
         } else if mode == .result, let preview = state?.dictationPreview {
             size = DictationPreviewLayout.panelSize(text: preview.text, result: resultSize)
         } else {
@@ -555,7 +577,7 @@ final class OverlayController {
         // Result / follow: keep the full panel on screen. Idle bar/menu: clamp to the bar
         // footprint so the wider menu may overhang instead of shifting the pill sideways.
         let half: CGFloat
-        if isFollowingPointer || mode == .result {
+        if isFollowingPointer || mode == .result || mode == .liveStream {
             half = size.width / 2
         } else {
             half = Mode.bar.size(result: resultSize).width / 2
@@ -569,7 +591,19 @@ final class OverlayController {
             width: size.width,
             height: size.height
         )
-        panel.setFrame(frame, display: true, animate: false)
+        let heightOnly = mode == .liveStream
+            && abs(panel.frame.width - frame.width) < 1
+            && abs(panel.frame.minX - frame.minX) < 1
+            && abs(panel.frame.height - frame.height) > 1
+        if heightOnly {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+                panel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            panel.setFrame(frame, display: true, animate: false)
+        }
         syncPanelVisibility()
     }
 
@@ -693,6 +727,7 @@ struct OverlayView: View {
             .animation(state.widgetDragging ? nil : Self.morph, value: state.overlayResult)
             .animation(state.widgetDragging ? nil : Self.morph, value: state.dictationPreview)
             .animation(state.widgetDragging ? nil : Self.morph, value: state.notePreview)
+            .animation(state.widgetDragging ? nil : Self.morph, value: state.liveStreamActive)
             .animation(state.widgetDragging ? nil : .easeOut(duration: 0.2), value: state.phase)
             .environment(\.colorScheme, .dark)
     }
@@ -778,6 +813,12 @@ struct OverlayView: View {
                         removal: .opacity.combined(with: .scale(scale: 0.97, anchor: .bottom))
                     )
                 )
+            } else if state.liveStreamActive {
+                LiveStreamCard(
+                    model: state.liveStream,
+                    width: state.config.resolvedOverlayResultSize.cardWidth
+                )
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if state.widgetTranslateOpen {
                 TranslateMenuCard(
                     languages: translateTargets,
@@ -1748,7 +1789,7 @@ private struct TranslateRowStyle: ButtonStyle {
     }
 }
 
-private enum SoftShadowStyle {
+enum SoftShadowStyle {
     case bar, menu
 
     var cornerRadius: CGFloat {
@@ -1759,7 +1800,7 @@ private enum SoftShadowStyle {
     }
 }
 
-private extension View {
+extension View {
     func softDropShadow(_ style: SoftShadowStyle) -> some View {
         modifier(SoftDropShadow(style: style))
     }
@@ -1768,7 +1809,7 @@ private extension View {
 /// Layered blurred copies of the shape: a tight contact edge plus progressively wider, fainter
 /// layers. Sums to a smooth gaussian falloff that follows the contour.
 /// Needs ~18pt free space below and ~14pt at the sides, or the panel clips it.
-private struct SoftDropShadow: ViewModifier {
+struct SoftDropShadow: ViewModifier {
     let style: SoftShadowStyle
 
     private static let layers: [(opacity: Double, blur: CGFloat, y: CGFloat)] = [

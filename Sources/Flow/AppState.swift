@@ -94,6 +94,9 @@ final class AppState: ObservableObject {
     @Published var widgetTranslateOpen = false
     @Published var overlayResult: OverlayResult?
     @Published var dictationPreview: DictationPreview?
+    /// Flow Stream: Karte über dem Widget, solange die Live-Session läuft.
+    @Published var liveStreamActive = false
+    let liveStream = LiveStreamModel()
     @Published var notePreview: SavedNotePreview?
     /// Notiz, die die Notizen-Seite nach dem Öffnen auswählen soll.
     @Published var noteToOpen: UUID?
@@ -166,11 +169,17 @@ final class AppState: ObservableObject {
     }
 
     var modelDisplayName: String {
-        if config.usesWhistle {
+        switch config.asrEngine {
+        case "whistle":
             return L10n.s("model.whistle.depth", config.whistleDepth)
+        case "parakeet":
+            return L10n.s("model.parakeet")
+        case "qwen3":
+            return L10n.s("model.qwen3")
+        default:
+            let id = config.resolvedWhisperModel.split(separator: "/").last.map(String.init) ?? L10n.s("model.local")
+            return L10n.s("model.whisper", id)
         }
-        let id = config.resolvedWhisperModel.split(separator: "/").last.map(String.init) ?? L10n.s("model.local")
-        return L10n.s("model.whisper", id)
     }
 
     func rememberApp(_ app: FrontApp) {

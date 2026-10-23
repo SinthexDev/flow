@@ -6,24 +6,32 @@ The name shown in the app comes from `CFBundleDisplayName`. The interface text f
 
 **Author: Sinthex**
 
-**Version 1.26.1** · [Changelog](https://sinthex.de/flow/changelog.html?lang=en) · [changelog.md](https://sinthex.de/flow/changelog.md)
+**Version 1.28.2** · [Changelog](https://sinthex.de/flow/changelog.html?lang=en) · [changelog.md](https://sinthex.de/flow/changelog.md)
 
 Project page: <https://sinthex.de/flow/>  
-Installer: <https://sinthex.de/flow/Sinthex-Flow-1.26.1.pkg>  
+Installer: <https://sinthex.de/flow/Sinthex-Flow-1.28.2.pkg>  
 Source: <https://github.com/SinthexDev/flow>
 
 ![Home](docs/screenshots/main-home.png)
 
-## 1.26.1 — October 21, 2026
+## 1.28.2 — October 21, 2026
 
-- **Bugfix** — The focus ring no longer stays on Home in the sidebar.
+- **Improvement** — Choosing the speech engine now uses the full width: four cards with a speed indicator, and below them the strengths of the selected engine.
+
+## 1.28.1 — October 21, 2026
+
+- **Bugfix** — While correcting, the menu bar now shows sparkles instead of the dotted circle. Recognition and translation have their own symbols.
+
+## 1.28.0 — October 21, 2026
+
+- **New** — Two more local speech engines: Parakeet (fast for German and EU) and Qwen3-ASR (more languages, still on device). Settings show speed, languages, and size for each engine.
 
 The full history is on the [changelog](https://sinthex.de/flow/changelog.html?lang=en).
 
 ## What Sinthex Flow does
 
 - Record with the Fn key. Double-tap for hands-free speech. Esc cancels.
-- Recognition uses Whisper locally on Apple Silicon. That audio does not leave the Mac.
+- Recognition runs locally on Apple Silicon (Whisper, Whistle, Parakeet, or Qwen3-ASR). That audio does not leave the Mac.
 - Optional correction with your own OpenAI key. The key stays in the Keychain, not in a config file and not in this repository. Settings can point at another OpenAI-compatible address, including a local model. The key stays optional and in the Keychain.
 - The correction model is chosen from the key. Sinthex Flow suggests the latest fast model. You can pin another one.
 - Style follows the frontmost app, for example coding in an editor and email in Mail. Each app can have its own style.
