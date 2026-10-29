@@ -1,6 +1,8 @@
 import unittest
+from types import SimpleNamespace
 
 from flow_engine.transcribe import (
+    _asr_result_text,
     _join_whistle_stream,
     discard_transcript,
     looks_repetitive,
@@ -13,6 +15,7 @@ from flow_engine.transcribe import (
     whistle_depth_for_quality,
     whisper_model_for_quality,
     whistle_language,
+    metal_budget,
 )
 
 
@@ -39,6 +42,17 @@ class RepetitionTests(unittest.TestCase):
     def test_keep_confident_speech(self):
         segments = [{"no_speech_prob": 0.2, "compression_ratio": 1.4}]
         self.assertFalse(discard_transcript(segments, "Hallo, wie geht es dir heute?"))
+
+    def test_asr_result_text_keeps_empty_string(self):
+        # Parakeet returns AlignedResult(text='', sentences=[]); empty must not
+        # fall through to str(result).
+        self.assertEqual(_asr_result_text(SimpleNamespace(text="")), "")
+        self.assertEqual(
+            _asr_result_text(SimpleNamespace(text="", sentences=[])),
+            "",
+        )
+        self.assertEqual(_asr_result_text(SimpleNamespace(text="Hallo")), "Hallo")
+        self.assertEqual(_asr_result_text(SimpleNamespace()), "")
 
 
 class HallucinationStripTests(unittest.TestCase):
@@ -124,6 +138,16 @@ class WhistleHelperTests(unittest.TestCase):
         )
         self.assertEqual(text, "Hallo dort")
         self.assertEqual(language, "de")
+
+    def test_metal_budget_stays_a_few_gigabytes(self):
+        gib = 1024**3
+        for memory in (8 * gib, 16 * gib, 32 * gib, 64 * gib):
+            wired, cache = metal_budget(memory)
+            self.assertLessEqual(wired, 3 * gib)
+            self.assertLess(wired, memory)
+            self.assertLessEqual(cache, 512 * 1024**2)
+            self.assertGreater(wired, 0)
+        self.assertEqual(metal_budget(0), (0, 0))
 
 
 if __name__ == "__main__":

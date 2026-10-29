@@ -200,6 +200,18 @@ def normalize_dictation_text(text: str) -> str:
     return cleaned.strip()
 
 
+def _asr_result_text(result) -> str:
+    """Read `.text` from an ASR result object.
+
+    Empty string must stay empty: `"" or str(result)` would insert the
+    object's repr (e.g. Parakeet's ``AlignedResult(text='', sentences=[])``).
+    """
+    raw = getattr(result, "text", None)
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
 def discard_transcript(segments: list, text: str) -> bool:
     stripped = text.strip()
     if not stripped:
@@ -490,6 +502,45 @@ def transcribe_whistle(
     return text, language_out
 
 
+def metal_budget(memory: int, recommended: int = 0) -> tuple[int, int]:
+    """Wired bytes and free-cache bytes for the speech model.
+
+    MLX examples for large language models wire half the RAM. Parakeet's
+    decoder keeps that peak after each clip, so a long session pins the Mac.
+    A few gigabytes cover Whisper large and Parakeet 0.6B.
+    """
+    if memory <= 0:
+        return 0, 0
+    gib = 1024**3
+    ceiling = 3 * gib
+    if recommended > 0:
+        ceiling = min(ceiling, recommended)
+    wired = min(ceiling, max(memory // 5, 2 * gib))
+    if wired >= memory:
+        wired = max(memory // 2, 1)
+    cache = min(gib // 2, max(wired // 2, 1))
+    return wired, cache
+
+
+def release_asr_memory() -> None:
+    """Return Parakeet and Qwen buffers. MLX otherwise keeps the peak resident."""
+    import gc
+
+    gc.collect()
+    try:
+        import mlx.core as mx
+    except ImportError:
+        return
+    cached = 0
+    try:
+        cached = int(mx.get_cache_memory())
+    except (TypeError, ValueError):
+        cached = 0
+    mx.clear_cache()
+    if cached >= 512 * 1024**2:
+        print(f"MLX-Cache freigegeben ({cached / 1024**2:.0f} MB)", flush=True)
+
+
 def _impulse_audio(seconds: float = 1.0) -> np.ndarray:
     samples = max(1, int(seconds * WHISTLE_SAMPLE_RATE))
     audio = np.zeros(samples, dtype=np.float32)
@@ -557,8 +608,12 @@ def transcribe_parakeet(
     if is_near_silence(audio):
         return "", ""
 
-    result = _parakeet_from_audio(audio, model_id)
-    text = normalize_dictation_text((getattr(result, "text", None) or str(result) or "").strip())
+    try:
+        result = _parakeet_from_audio(audio, model_id)
+        text = normalize_dictation_text(_asr_result_text(result))
+        del result
+    finally:
+        release_asr_memory()
     if discard_transcript([], text):
         return "", ""
     return text, ""
@@ -576,24 +631,34 @@ def transcribe_qwen3(
 
     session = _get_qwen3(model_id)
     forced = qwen3_language(language)
-    result = session.transcribe(
-        (audio, WHISTLE_SAMPLE_RATE),
-        language=forced,
-    )
-    language_out = (getattr(result, "language", None) or "").strip()
-    text = normalize_dictation_text((getattr(result, "text", None) or "").strip())
+    try:
+        result = session.transcribe(
+            (audio, WHISTLE_SAMPLE_RATE),
+            language=forced,
+        )
+        language_out = (getattr(result, "language", None) or "").strip()
+        text = normalize_dictation_text(_asr_result_text(result))
+        del result
+    finally:
+        release_asr_memory()
     if discard_transcript([], text):
         return "", language_out
     return text, language_out
 
 
 def warmup_parakeet(model_id: str = PARAKEET_MODEL) -> None:
-    _parakeet_from_audio(_impulse_audio(), model_id)
+    try:
+        _parakeet_from_audio(_impulse_audio(), model_id)
+    finally:
+        release_asr_memory()
 
 
 def warmup_qwen3(model_id: str = QWEN3_MODEL) -> None:
     session = _get_qwen3(model_id)
-    session.transcribe((_impulse_audio(), WHISTLE_SAMPLE_RATE), language="de")
+    try:
+        session.transcribe((_impulse_audio(), WHISTLE_SAMPLE_RATE), language="de")
+    finally:
+        release_asr_memory()
 
 
 def _whisper_options(
